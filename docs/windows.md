@@ -14,7 +14,8 @@ programs bring them to the Windows side:
 
 Windows support is a preview. Both programs are unsigned until the
 signing application is approved, so Smart App Control in enforce mode
-blocks them and SmartScreen warns on first start.
+blocks them and SmartScreen warns on first start (see
+[Code signing policy](#code-signing-policy)).
 
 ## What you need
 
@@ -29,6 +30,83 @@ blocks them and SmartScreen warns on first start.
   distro running on its own.
 - For the tray: the .NET 10 Desktop Runtime
   (`winget install Microsoft.DotNet.DesktopRuntime.10`).
+
+## Install
+
+In PowerShell, as yourself (no administrator rights):
+
+```powershell
+irm https://raw.githubusercontent.com/askysh/benchbar/main/install.ps1 | iex
+```
+
+The installer picks the zip for your CPU (x64 or Arm64) from the latest
+GitHub release, checks it against the release's
+`benchbar-windows-<version>-SHA256SUMS.txt`, and installs it to
+`%LOCALAPPDATA%\Programs\BenchBar`. Then it puts that folder on your user
+PATH (`benchbar.exe path install`), checks the .NET 10 Desktop Runtime and
+prints the `winget` line when it is missing, offers to open the tray at
+logon, and ends with `benchbar.exe doctor`. Running it again updates in
+place. It writes nothing inside a WSL distro; the final doctor starts the distro if it is stopped.
+
+Run as a file it takes `-Version X.Y.Z` (a given release), `-NoTray`
+(only `benchbar.exe`) and `-Yes` (no questions). Piped into `iex`, set
+`BENCHBAR_VERSION`, `BENCHBAR_NO_TRAY=1` or `BENCHBAR_YES=1` first.
+
+To run it as a file, download `install.ps1` and run `Unblock-File .\install.ps1`
+first (a downloaded script is blocked by the default execution policy), or
+start it with `powershell -ExecutionPolicy Bypass -File .\install.ps1 ...`.
+
+Without the script: download `benchbar-windows-<version>-amd64.zip` (or
+`-arm64.zip`) from the [releases](https://github.com/askysh/benchbar/releases),
+check it with `Get-FileHash`, unpack it into a folder of your choice and
+run `benchbar.exe path install` from there.
+
+### A test build you were sent
+
+Every zip carries `install.ps1`, so a build that is not on a release
+installs the same way, from its own folder:
+
+1. Unpack the whole zip (right click, Extract All) into a new folder, for
+   example in Downloads. `benchbar-windows-<version>-amd64.zip` is for
+   Intel and AMD PCs, `-arm64.zip` for Arm PCs.
+2. Open PowerShell in that folder and run:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\install.ps1
+   ```
+
+It checks every file against the `SHA256SUMS` in the zip, installs to
+`%LOCALAPPDATA%\Programs\BenchBar` as above, and ends with
+`benchbar.exe doctor`. To keep the zip unpacked, pass it instead:
+`.\install.ps1 -Zip .\benchbar-windows-<version>-amd64.zip`. A checksums
+file next to the zip is checked too when there is one.
+
+Every program in the zip is unsigned until the signing application is
+approved: SmartScreen shows "Windows protected your PC" on first start
+(More info, Run anyway), and Smart App Control in enforce mode blocks
+it. The `README.txt` in the zip says which programs are signed.
+
+## Code signing policy
+
+Pending: this section takes effect when the SignPath Foundation
+application is approved. Until then the Windows binaries are unsigned.
+
+- Free code signing for the project's own binaries (`benchbar.exe`, `BenchBarTray.exe`, `BenchBarTray.dll`, `BenchBar.Tray.Core.dll`) is provided
+  by [SignPath.io](https://about.signpath.io), with a certificate by
+  [SignPath Foundation](https://signpath.org). The signature names
+  SignPath Foundation as the publisher.
+- Only binaries built by the `release-windows.yml` workflow of
+  [askysh/benchbar](https://github.com/askysh/benchbar) from a release
+  tag are signed. Nothing built on a developer machine is.
+- Committers and reviewers: the members of the
+  [askysh/benchbar](https://github.com/askysh/benchbar) repository.
+  Approver: Akash Mishra ([@askysh](https://github.com/askysh)), who
+  approves each signing request.
+- Check a signature in PowerShell:
+  `Get-AuthenticodeSignature "$env:LOCALAPPDATA\Programs\BenchBar\benchbar.exe"`
+  shows `Valid` and the publisher.
+- Privacy: neither program sends data anywhere. The tray reads GitHub's
+  release list only when you click Check for Updates.
 
 ## The tray
 
