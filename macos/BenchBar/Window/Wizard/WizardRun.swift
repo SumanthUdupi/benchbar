@@ -58,9 +58,23 @@ final class WizardRun {
     var canStartChange: Bool { store.busyBench == nil }
 
     func send(_ event: WizardState.Event) {
+        // the Check page checks the folder the form will suggest, so suggest it first
+        if state.page == .welcome && (event == .chooseNewBench || event == .primary) {
+            _ = state.send(.suggest(taken()))
+        }
         let effects = state.send(event)
         for effect in effects { perform(effect) }
         syncPolling()
+    }
+
+    /// The benches' folders and site names, and the candidate folders that exist.
+    private func taken() -> WizardState.Taken {
+        let existing = WizardState.folderCandidates(home: state.home).filter { FileManager.default.fileExists(atPath: $0) }
+        var sites: [String: String] = [:]
+        for bench in store.benches {
+            for site in [bench.summary.site] + bench.siteRows.map(\.name) where sites[site] == nil { sites[site] = bench.name }
+        }
+        return WizardState.Taken(folders: Set(store.benches.map(\.path) + existing), sites: sites)
     }
 
     /// Return and Esc, and the buttons: the same events.

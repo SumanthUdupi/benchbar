@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## Unreleased
+## 0.8.0 - 2026-10-30
 
 ### Agents and recovery
 
@@ -109,6 +109,13 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- The BenchBar app shows the plan before Add App and Add Site run:
+  Review reads the CLI's `app add --dry-run --json` plan (the clones, the
+  build, the installs on each site, the restart, what it touches) and Add
+  App applies it by its token. A plan the bench has outgrown asks to
+  Review Again instead of running. Add Site does the same with the CLI's
+  `site add --dry-run --json` plan: its steps, what it touches, the default
+  site that stays and the hosts line.
 - Doctor warns in WSL when NTP inside the distro fights the Windows host
   clock (`wsl_time_sync`): each NTP poll steps the clock when Windows has
   drifted, and a step can stop a bench's worker. Fix: `sudo timedatectl
@@ -134,8 +141,8 @@ All notable changes to this project are documented here.
   and leaves out the checks that only exist on a Mac.
 
 - The BenchBar app has a first run wizard. A Mac with no bench opens the
-  window on it, and **New Bench…** under the new **+** in the sidebar
-  opens it later. **Check Your Mac** shows what is missing, with a button
+  window on it, and **New Bench…** in the **Add Bench** menu at the foot
+  of the sidebar opens it later. **Check Your Mac** shows what is missing, with a button
   for the Command Line Tools and the Homebrew command to copy. **New
   Bench** takes the folder, a built in or team profile (with its Python,
   Node and MariaDB), the app bundle, the site and the Administrator
@@ -154,7 +161,9 @@ All notable changes to this project are documented here.
 - Benches are the home of the BenchBar window: the sidebar lists each
   bench with its sites beneath it, then Team Profiles and Find Benches.
   General and Menu Bar moved to a Settings window (⌘,), and **About
-  BenchBar** in the app menu opens a window of its own.
+  BenchBar** opens a window of its own. The foot of the sidebar has
+  **Add Bench** (New Bench…, Adopt Existing Bench…, Find Benches…) and
+  buttons for Settings and About.
 - The app explains itself where you are: a four step walkthrough (from
   Done, Help > Show Walkthrough, and once on its own), a line under every
   bench that is not running saying why and offering the one next step
@@ -192,6 +201,94 @@ All notable changes to this project are documented here.
   as stale by its age, and two runs at once could stop with "File: unbound
   variable": GNU `stat -f` prints file system text where BSD `stat -f`
   prints a time.
+- The app's popover: ⌘D, ⌘F and the other shortcuts act on the bench the
+  picker shows. Before, after switching to a second bench they still
+  stopped or opened the first one.
+- The app's install wizard asks for the MariaDB root password in a field
+  labelled "MariaDB root password", with help that says it is not the
+  site's Administrator password. It read "Administrator password".
+- The app's Apps tab no longer says "on no site yet" for every app,
+  frappe included, on a bench whose site lists were never read: it asks
+  bench for them once and shows nothing about sites until it knows.
+- The app's Port Settings & Setup… on a managed bench that runs on its own
+  ports opens as Port Settings: the address, the ports and the port mode,
+  with Done. Before, it opened as "Set Up Selected Benches" with a red
+  "Stop this bench" and a disabled setup button.
+- The app's New Bench form suggests a folder and a site name no bench uses
+  (`~/frappe-bench-2` and `macdev2` next to an existing `~/frappe-bench`
+  with `macdev`), and the note about taken ports wraps instead of running
+  off the right edge.
+- The app's Settings window can be resized (from 480 by 400 points) and
+  remembers its size; it opens a little larger than the fixed 560 by 560.
+- The wizard's Check Your Mac page shows the port block a new bench gets
+  as information, not as a command to copy.
+- Find Benches: the "Stopped at 6 folders deep" warnings of a large scan
+  are one line, left aligned; before a scan it offers the folder it shows
+  instead of "Start with a folder"; benches BenchBar already manages show
+  a mark instead of a checkbox.
+- The Add App sheet's placeholder is plain text: its example URL rendered
+  as a link and the start of the placeholder was cut.
+- Health tab: "Terminal instructions" is in the size of the check it
+  belongs to, and Run Doctor shows a spinner while doctor runs again.
+  VoiceOver names the popover's bench picker and each Copy Fix button by
+  its check.
+- App layout: the popover's CLI missing buttons no longer truncate, the
+  Health rows fit in a popover with many sites (its content may now be
+  540 points tall before it scrolls), Set Up Management… shows once, the
+  passing checks of Check Your Mac are one line each, and a field at the
+  edge of a sheet or wizard page keeps its whole border. Messages show
+  without the CLI's `[FAIL]` and `[WARN]` markers, and doctor's counts
+  read the same in the popover and the Health tab ("1 failure · 1
+  warning").
+- The app opens its window on the first run wizard when it starts on a
+  Mac with no bench. Before, a new user saw only the menu bar icon. The
+  popover's empty state leads with Set Up a New Bench…; the Terminal
+  commands are a hint below it.
+- The app's New Bench form flags a site name another bench already has:
+  both sites share the hostname, and cookies ignore the port, so logging
+  in to one bench logs you out of the other. Review says so too, and no
+  longer marks the hosts line "Already done" when the line is that other
+  bench's.
+- The app's log window shows werkzeug's coloured lines as text: "WARNING:
+  This is a development server" read `[31m[1mWARNING`, and search
+  matches what you see.
+- The app's popover in light mode has a solid background: on macOS 26 a
+  dark window behind it showed through its text. A disabled Start, Stop or
+  Restart button is clearly faded next to the ones that work.
+- While a bench starts or restarts, the app shows no uptime until the new
+  run reports; it showed the previous run's ("up 42m").
+- **Add Bench > Adopt Existing Bench…** asks for one bench's folder and
+  opens its setup plan (the service files and the ports, as `benchbar
+  adopt`), instead of the same folder search as Find Benches. The setup
+  sheet for one bench is titled by its name.
+- The wizard's Check Your Mac page puts only commands in a box with Copy.
+  A fix in words (CleanMyMac's Ignore List, free disk space) is text, and
+  Mole's fix is its first step in words with the `echo` line to copy.
+- Opening BenchBar again (Finder, Spotlight) shows the BenchBar window
+  while About or Settings is open; before, it did nothing then.
+- The menu bar icon's right click menu has **Check for Updates…** in a
+  build without Sparkle too, as the app menu has: it opens About and
+  checks.
+- In a wide BenchBar window a bench's name, path and tabs line up with
+  its centered content instead of staying at the left edge. In the
+  narrowest window **Open in VS Code** moves into the "…" menu instead of
+  shrinking to "Open…".
+- `repair` run by a copy of BenchBar.app that the app did not register (a
+  development build, a second copy of the app) no longer points the shell
+  helpers at that copy's own CLI, which goes away with the build. The
+  block keeps the benchbar it names, or names Homebrew's copy, the
+  installer's or the app's link, and doctor run from such a copy no longer
+  says the block is outdated.
+- The commits and days behind in doctor, `app focus` and the JSON of
+  `app list` for an app whose remote branch merges in other history no
+  longer count every commit of that history (an app read "5541 commits"
+  and "5439 days behind", from a commit of 2011, where the branch was 14
+  commits ahead): both count along the branch itself, the commits it got
+  after yours (a merged release is one commit, not everything in it).
+- The docs site header drew two lines at its bottom edge; it now has one.
+  The site also takes the look of <https://akashmishra.com>: warm cream
+  and near black, system fonts, hairlines instead of boxes, and a moon and
+  sun button for the theme.
 
 ### Windows (preview)
 

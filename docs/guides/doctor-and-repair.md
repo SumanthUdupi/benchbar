@@ -51,8 +51,20 @@ below, and the action is what `repair` would run. The format is in the
 [JSON schema](../json-schema.md#benchbar-doctor---json).
 
 Doctor exits 1 when any check fails. Warnings alone exit 0. It never
-changes anything, never asks for a password and never reads the
-Keychain, so the app runs it on a timer.
+changes anything in a bench, never asks for a password and never reads
+the Keychain, so the app runs it on a timer.
+
+Three flags change what the report holds:
+
+- `--prerequisites` checks a Mac before an install, without a bench: the
+  first run wizard in the app shows the same list.
+- `--quick` skips the checks that start brew, python, node, bench or git,
+  or ask the site, and names them. `--json` lists them in
+  `skipped_checks`.
+- `--ack CHECK` silences one warning you have seen. It writes one line
+  to the bench's state file with the message it silenced, so the warning
+  returns when its message changes. `--unack CHECK` undoes it. A failure
+  cannot be silenced, and `repair` ignores silenced warnings.
 
 Checks with a repair action are fixed by `benchbar repair`. The others
 name a command for you to run, because the change is a person's call
@@ -341,9 +353,12 @@ here.
 One warning for each app a focus app needs (its `required_apps` in
 `hooks.py`, followed through other apps) that is behind its remote
 branch, for example `exponent_custom_v1 (needed by exponent_ecr) is 30
-commits / 12 days behind upstream/develop`. The days are the age of the
-oldest commit you do not have yet. A focus app itself never gets this
-warning: you pull the app you work on yourself. See
+commits / 12 days behind upstream/develop`. Commits and days follow the
+remote branch itself (git's first parent line): the commits it got after
+yours, and the age of the first of them. What a merge brought in from
+other branches or older history does not count, so a release merged in
+is one commit. A focus app itself never gets this warning: you pull the
+app you work on yourself. See
 [focus apps](apps.md#focus-apps-and-their-dependencies).
 
 Doctor stays read only and never fetches on its own: the numbers come

@@ -28,7 +28,7 @@ struct AppCommands {
 struct PopoverView: View {
     let store: BenchStore
     let commands: AppCommands
-    static let maxContentHeight: CGFloat = 470
+    static let maxContentHeight: CGFloat = 540
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -47,6 +47,7 @@ struct PopoverView: View {
         }
         .padding(14)
         .frame(width: 370)
+        .background { PopoverBacking() }
     }
 
     @ViewBuilder private var content: some View {
@@ -72,10 +73,16 @@ struct PopoverView: View {
                         }
                     }
                     .pickerStyle(.menu)
+                    .accessibilityLabel("Bench")
+                    .help("The bench this popover shows; its shortcuts act on it")
                     Divider()
                 }
                 if let bench = store.selected {
+                    // a new panel per bench: without the id SwiftUI kept the ⌘ shortcuts
+                    // (and their actions) of the bench first shown, so ⌘D after the
+                    // picker changed stopped the other bench
                     BenchPanel(store: store, bench: bench, commands: commands)
+                        .id(bench.path)
                 }
             }
         }
@@ -153,7 +160,7 @@ struct BenchPanel: View {
             VStack(alignment: .trailing, spacing: 3) {
                 StatePill(state: bench.state, text: BenchText.headline(
                     bench.state, reason: bench.machine.stopReason, exitCode: bench.status?.lastExitCode))
-                if let since = bench.runningSince {
+                if let since = bench.upSince {
                     Uptime(since: since) { Text("up \($0)").font(.caption).monospacedDigit().foregroundStyle(.secondary) }
                 }
             }
@@ -161,7 +168,7 @@ struct BenchPanel: View {
     }
 
     @ViewBuilder private var banners: some View {
-        if let guidance = bench.guidance {
+        if let guidance = bench.guidance?.without(panelAction) {
             GuidanceLine(guidance: guidance, enabled: guidanceEnabled(guidance)) { perform($0) }
         }
         if let error = bench.lastError ?? bench.refreshError, bench.portConflict == nil {
@@ -169,6 +176,12 @@ struct BenchPanel: View {
                 .help(error)
             Button("View Health…") { commands.manage(bench, .health, false) }.controlSize(.small)
         }
+    }
+
+    /// What the button under the header does: Set Up Management…, Review
+    /// Port Conflict… or Start (among Stop and Restart).
+    private var panelAction: BenchGuidance.Action {
+        bench.needsService ? .setUpManagement : (bench.portConflict != nil ? .reviewPortConflict : .start)
     }
 
     private func guidanceEnabled(_ guidance: BenchGuidance) -> Bool {
@@ -309,10 +322,7 @@ struct DoctorSection: View {
                 if report.needsAttention.isEmpty {
                     Label("All checks passed", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text([
-                        report.summary.fail > 0 ? "\(report.summary.fail) " + (report.summary.fail == 1 ? "failure" : "failures") : nil,
-                        report.summary.warn > 0 ? "\(report.summary.warn) " + (report.summary.warn == 1 ? "warning" : "warnings") : nil
-                    ].compactMap { $0 }.joined(separator: " · "))
+                    Text(report.summary.attention ?? "")
                         .font(.caption.weight(.medium)).foregroundStyle(report.summary.fail > 0 ? .red : .orange)
                     ForEach(Array(report.needsAttention.prefix(Self.visibleChecks)), id: \.rowKey) { CompactCheckRow(check: $0) }
                     if report.needsAttention.count > Self.visibleChecks {
@@ -344,6 +354,7 @@ struct CompactCheckRow: View {
                 Button("Copy Fix") { Workspace.copy(fix) }
                     .controlSize(.mini)
                     .help(fix)
+                    .accessibilityLabel("Copy the fix for \(check.label)")
             }
         }
     }
@@ -360,9 +371,13 @@ struct CheckRow: View {
                 if check.level != .ok {
                     Text(check.message).font(.caption).foregroundStyle(.secondary)
                     if let fix = check.fixCommand, !fix.isEmpty {
-                        DisclosureGroup("Terminal instructions") {
+                        // the label in the row's caption size, not the body size of a plain title
+                        DisclosureGroup {
                             Text(fix).font(.caption.monospaced()).textSelection(.enabled)
                             Button("Copy Command") { Workspace.copy(fix) }.controlSize(.small)
+                                .accessibilityLabel("Copy the fix for \(check.label)")
+                        } label: {
+                            Text("Terminal instructions").font(.caption)
                         }
                     }
                 }
@@ -451,6 +466,23 @@ struct ActionButton: View {
         }
         .controlSize(.large)
         .disabled(!enabled)
+        // the system's disabled look on the popover's glass was close to
+        // the enabled one: Start beside Stop on a running bench read as two
+        // live buttons
+        .opacity(enabled || busy ? 1 : 0.45)
+    }
+}
+
+/// Behind the popover's content in light mode. macOS 26 draws the popover
+/// as clear glass, and with a dark window behind it the window's text showed
+/// through ours. Dark mode keeps the glass: light text stays readable on it.
+struct PopoverBacking: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        if colorScheme == .light {
+            Color(nsColor: .windowBackgroundColor).opacity(0.92).ignoresSafeArea()
+        }
     }
 }
 
@@ -498,14 +530,15 @@ struct CLIMissingView: View {
                 Text(hint).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // three buttons do not fit the popover's width: Copy goes to a row of its own
             HStack {
                 Button("Choose benchbar…", action: choose)
                 Button("Try Again", action: retry)
-                if case .notFound = error {
-                    Button("Copy brew Command") { Workspace.copy(Homebrew.installCLI) }
-                        .help(Homebrew.installCLI)
-                        .accessibilityLabel("Copy \(Homebrew.installCLI)")
-                }
+            }
+            if case .notFound = error {
+                Button("Copy brew Command") { Workspace.copy(Homebrew.installCLI) }
+                    .help(Homebrew.installCLI)
+                    .accessibilityLabel("Copy \(Homebrew.installCLI)")
             }
         }
     }
@@ -523,14 +556,25 @@ struct NoBenchView: View {
                 ProgressView("Loading benches").controlSize(.small)
             } else {
                 Label("No bench found", systemImage: "tray").font(.headline)
-                Text(error ?? "Create one with the installer (benchbar install), or register one you already have with benchbar adopt <path>.")
-                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                if error == nil {
+                if let error {
+                    Text(error)
+                        .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
                     // first run: the wizard in the BenchBar window gets a bench going
+                    Text("The BenchBar window sets up a new bench step by step, or finds one you already have.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     Button("Set Up a New Bench…", action: setUp).buttonStyle(.borderedProminent)
-                    Link("The Install guide has the same steps for Terminal.", destination: BenchBarLinks.install)
-                        .font(.caption)
+                    // Terminal second: the same steps without the app
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("In Terminal: benchbar install, or benchbar adopt PATH for a bench you have.")
+                            .foregroundStyle(.secondary).textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Link("Install guide", destination: BenchBarLinks.install)
+                    }
+                    .font(.caption)
+                    .padding(.top, 2)
                 }
                 Button("Try Again", action: retry)
             }

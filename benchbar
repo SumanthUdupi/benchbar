@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-FL_VERSION="0.7.3"
+FL_VERSION="0.8.0"
 
 # Resolve the real script location even when invoked through a symlink
 # (for example ~/.local/bin/frappe-mac).
@@ -222,7 +222,7 @@ Daily
   register PATH ...   Remember selected benches without changing their services.
   logs                Tail logs/bench.log. Flags: --worker, --worker-error, --previous, -n50, --no-follow,
                       --process web|socketio|schedule|worker (worker reads logs/worker.log; with --json:
-                      the lines as JSON)
+                      the lines as JSON, --since TIME or --since-restart for the newer ones only)
   fg                  Stop the service and run honcho in the foreground.
   watch               Run bench watch for asset rebuilds.
   autostart on|off    Whether the bench may come back after login.

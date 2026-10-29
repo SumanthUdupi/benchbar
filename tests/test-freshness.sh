@@ -223,4 +223,53 @@ run_fm app focus --fetch --json --bench-dir "$BENCH" >/dev/null
 OFFLINE=1 run_fm doctor --json --bench-dir "$BENCH"
 assert_contains "$(check "$OUT" dependency_behind)" "git status   (commit or stash the changes, then: benchbar app update mid_dep"
 
+# ---- an old history merged in (an app that took in another repository):
+# the commits and the days count along the remote branch (its first parent
+# line): the merge, never the 2011 commit it brought along
+make_app_remote merged_app
+add_policy merged_app main
+git clone -q --origin upstream --branch main "file://${REMOTES}/merged_app.git" "$BENCH/apps/merged_app"
+printf 'merged_app\n' >>"$BENCH/sites/apps.txt"
+(
+  cd "$WORK/merged_app" || exit 1
+  git checkout -q --orphan old && git rm -rqf . && printf 'old\n' >old.txt && git add old.txt
+  GIT_AUTHOR_DATE="2011-12-08T12:00:00Z" GIT_COMMITTER_DATE="2011-12-08T12:00:00Z" git commit -q -m "a commit from 2011"
+  git checkout -q main
+  GIT_COMMITTER_DATE="@$((NOW - 5 * DAY)) +0000" git merge -q --no-ff --allow-unrelated-histories -m "merge the old history" old
+  git push -q origin main
+)
+git -C "$BENCH/apps/merged_app" fetch -q upstream
+OFFLINE=1 FL_NOW="$NOW" run_fm app focus --json --bench-dir "$BENCH"
+assert_eq "0" "$CODE" "$OUT"
+assert_eq "2" "$(git -C "$BENCH/apps/merged_app" rev-list --count HEAD..upstream/main)" "(every reachable commit)"
+assert_eq "1" "$(app_field "$OUT" merged_app behind)" "(the merge, not the commit it brought along)"
+assert_eq "5" "$(app_field "$OUT" merged_app behind_days)" "(the age of the merge, not of the 2011 commit)"
+
+# ---- release branches merged into a version branch (india_compliance):
+# two releases, each a hotfix branch of 3 commits merged plus a bump, is 4
+# commits on the branch and 10 reachable from it
+make_app_remote release_app
+add_policy release_app main
+git clone -q --origin upstream --branch main "file://${REMOTES}/release_app.git" "$BENCH/apps/release_app"
+printf 'release_app\n' >>"$BENCH/sites/apps.txt"
+(
+  cd "$WORK/release_app" || exit 1
+  for rel in 1 2; do
+    git checkout -q -b "hotfix-$rel" main
+    for c in 1 2 3; do printf '%s %s\n' "$rel" "$c" >"fix-$rel-$c.txt" && git add . && git commit -q -m "fix $rel $c"; done
+    git checkout -q main
+    git merge -q --no-ff -m "release $rel" "hotfix-$rel"
+    printf '%s\n' "$rel" >version.txt && git add . && git commit -q -m "bump version to $rel"
+  done
+  git push -q origin main
+)
+git -C "$BENCH/apps/release_app" fetch -q upstream
+assert_eq "10" "$(git -C "$BENCH/apps/release_app" rev-list --count HEAD..upstream/main)" "(every reachable commit)"
+assert_eq "4" "$(git -C "$BENCH/apps/release_app" rev-list --count --first-parent HEAD..upstream/main)"
+OFFLINE=1 FL_NOW="$NOW" run_fm app focus --json --bench-dir "$BENCH"
+assert_eq "0" "$CODE" "$OUT"
+assert_eq "4" "$(app_field "$OUT" release_app behind)" "(releases and bumps, not the commits inside the hotfix branches)"
+OFFLINE=1 FL_NOW="$NOW" run_fm app focus --bench-dir "$BENCH"
+assert_contains "$OUT" "4 (0d) upstream/main"
+
 printf 'test-freshness: ok\n'

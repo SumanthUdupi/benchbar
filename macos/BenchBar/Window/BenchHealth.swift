@@ -45,10 +45,14 @@ struct BenchHealth: View {
                 HStack {
                     Text("Doctor")
                     if let report = bench.doctor {
-                        Text("\(report.summary.ok) ok, \(report.summary.warn) warn, \(report.summary.fail) fail")
+                        Text(report.summary.text)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
+                    // a report on screen hides the "Running doctor…" row: the spinner says it runs again
+                    if bench.isRunningDoctor && bench.doctor != nil {
+                        ProgressView().controlSize(.small).accessibilityLabel("Running doctor")
+                    }
                     Button("Run Doctor") { Task { await store.runDoctor(on: bench) } }
                         .disabled(bench.isRunningDoctor)
                     // the main action only when doctor found something repair can fix
@@ -161,7 +165,7 @@ struct RepairSheet: View {
                             if step.sudo { Tag(text: "Asks for your password", color: .orange) }
                         }
                         if !step.message.isEmpty, step.status != "done" {
-                            Text(step.message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            Text(CLIText.plain(step.message)).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }

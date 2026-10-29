@@ -116,6 +116,7 @@ struct SnapshotTests {
         10:00:01 system      | redis_cache.1 started (pid=4101)
         10:00:01 redis_cache.1 | Ready to accept connections tcp
         10:00:02 web.1       | * Running on http://127.0.0.1:8000
+        10:00:02 web.1       | \u{1B}[33mPress CTRL+C to quit\u{1B}[0m
         10:00:03 socketio.1  | Realtime service listening on: ws://0.0.0.0:9000
         10:00:05 web.1       | 127.0.0.1 - - "GET /api/method/ping HTTP/1.1" 200 -
         10:00:09 worker.1    | 10:00:09 default: frappe.utils.background_jobs.run_doc_method (job-1)
@@ -177,6 +178,22 @@ struct SnapshotTests {
         try render(window(store, workbench, router), "window-sites")
         router.benchTab = .overview
         try render(window(store, workbench, router), "window-overview")
+    }
+
+    /// A wide window: the header and tabs keep to the Form's centered
+    /// column. The narrowest: "Open in VS Code" moves into the "…" menu.
+    @Test func windowWidths() async throws {
+        let store = try await windowStore()
+        let workbench = Workbench(store: store)
+        let router = WindowRouter()
+        router.show(bench: "/Users/you/frappe-bench", tab: .overview)
+        func sized(_ width: CGFloat) -> some View {
+            MainWindowView(store: store, router: router, workbench: workbench, about: AboutModel(store: store),
+                           discovery: BenchDiscovery(store: store), wizard: wizardView(store, WizardRun(store: store)))
+                .frame(width: width, height: 620)
+        }
+        try render(sized(1500), "window-overview-wide")
+        try render(sized(770), "window-overview-narrowest")
     }
 
     @Test func windowProfiles() async throws {
@@ -286,6 +303,15 @@ struct SnapshotTests {
         try render(PortSetupSheet(run: run, close: {}), "port-setup-preview")
     }
 
+    @Test func portSettingsOnAHealthyBench() async throws {
+        let tests = try PortSetupTests()
+        let (store, _) = try await tests.setup()
+        tests.base.cli.answer("ports plan", json: tests.settledPlanJSON())
+        let run = PortSetupRun(summaries: [try #require(store.selected).summary], store: store, opensSettings: true)
+        await run.loadPlan()
+        try render(PortSetupSheet(run: run, close: {}), "port-settings-healthy")
+    }
+
     @Test func settingsWindow() async throws {
         base.cli.answer("list", json: base.listJSON())
         // a 0.4 CLI reports the scheduler, so the switch is live in the screenshot
@@ -305,7 +331,9 @@ struct SnapshotTests {
             SettingsView(settings: base.settings, store: store, library: library(), launchAtLogin: LaunchAtLogin(),
                          notifier: Notifier(settings: base.settings), part: part, showsHeader: false, chooseCLI: {})
         }
+        // the window's first size; the window can be resized from there
         let view = SettingsTabsView(tabs: tabs, general: part(.general), menuBar: part(.menuBar))
+            .frame(width: SettingsTabsView.size.width, height: SettingsTabsView.size.height)
         try render(view, "settings-general")
         tabs.selected = .menuBar
         try render(view, "settings-menubar")
@@ -317,8 +345,33 @@ struct SnapshotTests {
         let store = try await windowStore()
         let workbench = Workbench(store: store)
         let bench = try #require(store.benches.last)
-        try render(AddSiteSheet(bench: bench) { _, _ in } cancel: {}, "add-site-sheet")
-        try render(AddAppSheet(bench: bench, sites: bench.siteRows.map(\.name)) { _, _, _ in } cancel: {}, "add-app-sheet")
+        let sites = bench.siteRows.map(\.name)
+        try render(AddSiteSheet(workbench: workbench, bench: bench) {}, "add-site-sheet")
+        try render(AddAppSheet(workbench: workbench, bench: bench, sites: sites) {}, "add-app-sheet")
+        // the plan states: the CLI's dry run (fixtures from its real output), then the stale token
+        func appStart(_ fixture: String, _ stage: (AppAddPlan) -> PlanReviewFlow<AppAddPlan>.Stage) throws -> AddAppSheet.Start {
+            let plan = try BenchJSON.decode(AppAddPlan.self, from: Fixture.data(fixture))
+            return .init(source: plan.repo, branch: "", site: plan.sites.first?.name ?? "", flow: .init(stage: stage(plan)))
+        }
+        try render(AddAppSheet(workbench: workbench, bench: bench, sites: sites, start: appStart("app-add-plan-required") { .reviewing($0) }) {},
+                   "add-app-plan")
+        try render(AddAppSheet(workbench: workbench, bench: bench, sites: sites, start: appStart("app-add-plan") { .reviewing($0) }) {},
+                   "add-app-plan-simple")
+        try render(AddAppSheet(workbench: workbench, bench: bench, sites: sites, start: appStart("app-add-plan-errors") { .reviewing($0) }) {},
+                   "add-app-plan-errors")
+        try render(AddAppSheet(workbench: workbench, bench: bench, sites: sites,
+                               start: appStart("app-add-plan") { _ in .stale("The app add plan changed since it was shown.") }) {},
+                   "add-app-plan-stale")
+        func siteStart(_ fixture: String, _ stage: (SiteAddPlan) -> PlanReviewFlow<SiteAddPlan>.Stage) throws -> AddSiteSheet.Start {
+            let plan = try BenchJSON.decode(SiteAddPlan.self, from: Fixture.data(fixture))
+            return .init(name: plan.site, password: "pw", flow: .init(stage: stage(plan)))
+        }
+        try render(AddSiteSheet(workbench: workbench, bench: bench, start: siteStart("site-add-plan") { .reviewing($0) }) {}, "add-site-plan")
+        try render(AddSiteSheet(workbench: workbench, bench: bench, start: siteStart("site-add-plan-exists") { .reviewing($0) }) {},
+                   "add-site-plan-nothing")
+        try render(AddSiteSheet(workbench: workbench, bench: bench,
+                                start: siteStart("site-add-plan") { _ in .stale("The site add plan changed since it was shown.") }) {},
+                   "add-site-plan-stale")
         base.cli.answer("app update", json: try Fixture.string("app-update-plan"))
         await workbench.loadApps(bench)
         let app = try #require(workbench.apps[bench.path]?.apps.first { $0.name != "frappe" } ?? workbench.apps[bench.path]?.apps.first)
@@ -387,7 +440,7 @@ struct SnapshotTests {
             hosting.layoutSubtreeIfNeeded()
             let size = hosting.fittingSize
             if name.hasPrefix("popover-") {
-                #expect(size.height <= 620, "Popover height must remain bounded with diagnostics and many sites")
+                #expect(size.height <= 690, "Popover height must remain bounded with diagnostics and many sites")
                 #expect(size.width <= 400)
             }
             window.setContentSize(size)

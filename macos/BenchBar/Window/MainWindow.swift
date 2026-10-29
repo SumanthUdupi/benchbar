@@ -25,6 +25,9 @@ final class WindowRouter {
     /// Set to open the Repair sheet on the bench page when it appears.
     var repairRequested = false
     var scanRequested = false
+    /// Set by Add Bench > Adopt Existing Bench…: Find Benches asks for one
+    /// bench's folder and opens its setup plan.
+    var adoptRequested = false
     var setupRequest: String?
     var startAfterSetup = false
     /// Set by the popover: the Sites tab of this bench opens its Add Hosts Lines sheet.
@@ -42,6 +45,10 @@ final class WindowRouter {
     var notice: String?
     /// A benchbar://profile link: Team Profiles opens the sheet prefilled.
     var profileRequest: URLRouter.ProfileLink?
+    /// Set by the app delegate: the sidebar footer's gear and info buttons
+    /// open the Settings and About windows.
+    @ObservationIgnored var openSettings: (() -> Void)?
+    @ObservationIgnored var openAbout: (() -> Void)?
 
     func show(bench path: String, tab: BenchTab = .overview) {
         pane = .bench(path)
@@ -231,34 +238,51 @@ struct MainSidebar: View {
     }
 }
 
-/// The "+" pinned at the bottom of the sidebar.
+/// The "+" pinned at the bottom of the sidebar, then Settings and About:
+/// their own windows, which the sidebar would otherwise never lead to.
 struct SidebarFooter: View {
     @Bindable var router: WindowRouter
     let wizard: WizardRun
 
     var body: some View {
-        HStack {
+        HStack(spacing: 12) {
             Menu {
                 Button("New Bench…", systemImage: "plus.square") {
                     wizard.reopen()
                     router.pane = .wizard
                 }
                 Button("Adopt Existing Bench…", systemImage: "arrow.down.doc") {
-                    router.scanRequested = true
+                    router.adoptRequested = true
                     router.pane = .discovery
                 }
                 Button("Find Benches…", systemImage: "folder.badge.plus") { router.pane = .discovery }
             } label: {
-                Image(systemName: "plus")
+                // a label, like Reminders' Add List: a bare "+" read as unfinished
+                Label("Add Bench", systemImage: "plus.circle")
+                    .labelStyle(.titleAndIcon)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .accessibilityLabel("Add a bench")
             .help("New Bench, Adopt Existing Bench, Find Benches")
             Spacer()
+            footerButton("gearshape", label: "Settings", help: "Settings (⌘,)") { router.openSettings?() }
+            footerButton("info.circle", label: "About BenchBar",
+                         help: "About BenchBar: versions, Check for Updates, Report a Bug") { router.openAbout?() }
         }
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .imageScale(.large)
+        .frame(height: 28)
         .padding(.horizontal, WindowMetrics.spacing).padding(.vertical, WindowMetrics.rowSpacing)
+    }
+
+    private func footerButton(_ symbol: String, label: String, help: String,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol) }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(label)
+            .help(help)
     }
 }
 

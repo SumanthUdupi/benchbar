@@ -23,17 +23,21 @@ struct NewBenchPage: View {
                 if let problem = state.prerequisites?.folderProblem {
                     Label(problem.message, systemImage: problem.level == .fail ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
                         .font(.caption).foregroundStyle(problem.level == .fail ? .red : .orange)
-                        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled).wrapsInFormColumn()
                 }
                 profilePicker(state)
                 bundlePicker(state)
                 TextField("Site name", text: Binding(get: { state.form.site }, set: { run.send(.setSite($0)) }), prompt: Text("macdev"))
                 if let problem = state.siteProblem {
                     Text(problem).font(.caption).foregroundStyle(.red)
+                } else if let clash = state.siteClash {
+                    Label(clash, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange).wrapsInFormColumn()
                 }
                 LabeledContent("Administrator password") {
                     HStack(spacing: WindowMetrics.rowSpacing) {
-                        PasswordField(text: Binding(get: { state.form.adminPassword.value }, set: { run.send(.setAdminPassword($0)) }),
+                        PasswordField(label: "Administrator password",
+                                      text: Binding(get: { state.form.adminPassword.value }, set: { run.send(.setAdminPassword($0)) }),
                                       reveal: revealPassword)
                         Toggle(isOn: $revealPassword) { Image(systemName: revealPassword ? "eye.slash" : "eye") }
                             .toggleStyle(.button)
@@ -44,7 +48,7 @@ struct NewBenchPage: View {
                 if state.showsPortField {
                     TextField("Port offset", text: Binding(get: { state.form.portOffset }, set: { run.send(.setPortOffset($0)) }))
                     if let taken = state.prerequisites?.check("default_ports") {
-                        Text(taken.message).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                        Text(taken.message).font(.caption).foregroundStyle(.orange).wrapsInFormColumn()
                     }
                 }
             }
@@ -86,16 +90,28 @@ struct NewBenchPage: View {
     }
 }
 
+extension View {
+    /// A note under a field of a `.columns` form wraps at the column's width.
+    /// With only `fixedSize(vertical:)` its one line ideal width widened the
+    /// column past the page, and the fields and the note were cut at the right.
+    func wrapsInFormColumn() -> some View {
+        fixedSize(horizontal: false, vertical: true)
+            .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 /// The password field with a reveal toggle: a secure field, or a plain one while revealed.
+/// `label` names the secret it asks for (its placeholder and VoiceOver label).
 struct PasswordField: View {
+    let label: String
     @Binding var text: String
     let reveal: Bool
 
     var body: some View {
         if reveal {
-            TextField("Administrator password", text: $text).labelsHidden()
+            TextField(label, text: $text).labelsHidden()
         } else {
-            SecureField("Administrator password", text: $text).labelsHidden()
+            SecureField(label, text: $text).labelsHidden()
         }
     }
 }
@@ -110,7 +126,7 @@ struct ReviewPage: View {
         WizardScaffold("Review", explanation: "This is what BenchBar will do. Nothing has changed yet.", phase: phase(state)) {
             if let plan = state.plan {
                 summary(state, plan)
-                stepList(plan)
+                stepList(plan, sharedWith: state.bench(usingSite: plan.site))
                 SheetNote("Install starts it, and that is your confirmation. Steps that ask for your password show macOS's own dialog: BenchBar never sees the password. Cancel a dialog and that step is skipped with the command to run yourself.")
             }
         } actions: {
@@ -130,6 +146,12 @@ struct ReviewPage: View {
         return VStack(alignment: .leading, spacing: WindowMetrics.lineSpacing + 2) {
             LabeledContent("Folder") { Text((plan.bench as NSString).abbreviatingWithTildeInPath).textSelection(.enabled) }
             LabeledContent("Site") { Text(plan.webURL ?? plan.site).textSelection(.enabled) }
+            if let bench = state.bench(usingSite: plan.site) {
+                Label("\(bench) has a site of the same name: logging in to one bench logs you out of the other.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             LabeledContent("Profile") {
                 Text(([plan.profile] + [profile?.versions]).compactMap { $0 }.joined(separator: ": ")).textSelection(.enabled)
             }
@@ -142,7 +164,9 @@ struct ReviewPage: View {
         }
     }
 
-    private func stepList(_ plan: InstallPlan) -> some View {
+    /// `sharedWith`: the bench whose site has this name. Its hosts line is
+    /// in place, but it is that bench's line, not this install's work done.
+    private func stepList(_ plan: InstallPlan, sharedWith bench: String?) -> some View {
         VStack(alignment: .leading, spacing: WindowMetrics.rowSpacing) {
             Text("Steps").font(.headline)
             ForEach(plan.steps) { step in
@@ -153,6 +177,8 @@ struct ReviewPage: View {
                     if step.sudo {
                         if step.willRun {
                             Tag(text: "Asks for your password", color: .orange)
+                        } else if step.id == "hosts_entry", let bench {
+                            Tag(text: "Already there for \(bench)", color: .orange)
                         } else {
                             Tag(text: "Already done", color: .secondary)
                         }

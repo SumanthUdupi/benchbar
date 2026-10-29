@@ -28,6 +28,7 @@ struct WorkbenchTests {
     @Test func decodesTheAppList() throws {
         let list = try BenchJSON.decode(AppList.self, from: Fixture.data("app-list"))
         #expect(list.apps.map(\.name) == ["frappe", "erpnext", "acme_erp"])
+        #expect(list.sitesKnown)
         let custom = list.apps[2]
         #expect(custom.dirty && custom.policyBranch == nil && custom.sites.isEmpty)
         #expect(AppSource.sitesWithout(list.apps[1], among: ["v16dev", "v16two"]) == ["v16two"])
@@ -68,14 +69,17 @@ struct WorkbenchTests {
 
     // MARK: changes
 
-    @Test func addAppSendsTheSourceBranchAndSiteWithYes() async throws {
+    @Test func addAppAppliesThePlanByItsTokenWithYes() async throws {
         let (store, _) = try await store()
         base.cli.answer("app", json: try Fixture.string("app-list"))
         let bench = try #require(store.benches.first { $0.path == v16 })
         let workbench = Workbench(store: store)
-        await workbench.addApp(" https://github.com/acme/acme_erp ", branch: "develop", site: "v16two", on: bench)
-        #expect(base.cli.calls.contains(["app", "add", "https://github.com/acme/acme_erp", "--yes", "--plain", "--bench-dir", v16,
+        let token = String(repeating: "ab", count: 32)
+        let error = await workbench.addApp(" https://github.com/acme/acme_erp ", branch: "develop", site: "v16two", token: token, on: bench)
+        #expect(error == nil)
+        #expect(base.cli.calls.contains(["app", "add", "https://github.com/acme/acme_erp", "--apply", token, "--yes", "--plain", "--bench-dir", v16,
                                          "--branch", "develop", "--site", "v16two"]))
+        #expect(!base.cli.calls.contains { $0.starts(with: ["app", "add"]) && !$0.contains("--apply") }, "nothing runs without a token")
         #expect(workbench.result == .init(title: "Add acme_erp", error: nil, scope: v16), "the banner shows on this bench only")
         #expect(bench.activity == nil, "the slot is free again")
     }
@@ -84,9 +88,9 @@ struct WorkbenchTests {
         let (store, runner) = try await store()
         base.cli.answer("site", json: "")
         let bench = try #require(store.benches.first { $0.path == v16 })
-        await Workbench(store: store).addSite("v16three", adminPassword: "s3cret pw", on: bench)
+        await Workbench(store: store).addSite("v16three", adminPassword: "s3cret pw", token: "tok", on: bench)
         let call = try #require(runner.calls.first { $0.arguments.starts(with: ["site", "add"]) })
-        #expect(call.arguments == ["site", "add", "v16three", "--yes", "--plain", "--bench-dir", v16])
+        #expect(call.arguments == ["site", "add", "v16three", "--apply", "tok", "--yes", "--plain", "--bench-dir", v16])
         #expect(!call.arguments.joined(separator: " ").contains("s3cret"))
         #expect(call.environment["ADMIN_PASSWORD"] == "s3cret pw")
         #expect(!runner.calls.filter { !$0.arguments.starts(with: ["site", "add"]) }.contains { $0.environment["ADMIN_PASSWORD"] != nil },
@@ -109,7 +113,7 @@ struct WorkbenchTests {
         base.cli.answer("app", .init(exitCode: 1, stdout: "[FAIL] cannot read git@github.com:acme/private.git (no SSH key)", stderr: ""))
         let bench = try #require(store.benches.first { $0.path == v16 })
         let workbench = Workbench(store: store)
-        await workbench.addApp("git@github.com:acme/private.git", branch: "", site: nil, on: bench)
+        await workbench.addApp("git@github.com:acme/private.git", branch: "", site: nil, token: "t", on: bench)
         #expect(workbench.result?.error?.contains("no SSH key") == true)
         #expect(!base.cli.calls.contains { $0.contains("--branch") }, "an empty branch is left to the CLI")
     }
@@ -285,7 +289,7 @@ struct OnDemandTests {
         await show(store, workbench, bench)
         var doctor = 1, apps = 1
         let changes: [(name: String, listsApps: Bool, run: () async -> Void)] = [
-            ("a site", false, { await workbench.addSite("two.localhost", adminPassword: "x", on: bench) }),
+            ("a site", false, { await workbench.addSite("two.localhost", adminPassword: "x", token: "tok", on: bench) }),
             ("a raw change", false, { _ = await store.runChange("Something", on: bench) { _ throws(CLIError) in } }),
             ("the scheduler", false, { await store.setScheduler(true, on: bench) }),
             ("a focus pin", true, { await workbench.setFocus(.ignore, app: "erpnext", on: bench) }),
@@ -312,11 +316,29 @@ struct OnDemandTests {
         let (store, workbench, bench) = try await store()
         store.setWindow(WindowSight(isOpen: true, isVisible: true))
         await workbench.showApps(bench)
-        await workbench.addApp("hrms", branch: "", site: nil, on: bench)
+        await workbench.addApp("hrms", branch: "", site: nil, token: "t", on: bench)
         await workbench.showApps(bench)
         let lists = base.cli.calls.filter { $0.starts(with: ["app", "list"]) }
         #expect(lists.count == 2)
         #expect(lists.last == ["app", "list", "--json", "--bench-dir", base.benchPath])
+    }
+
+    /// A site cache that was never filled (`sites_checked_at` null) is no
+    /// answer: the page asks bench once, and the rows say nothing until then.
+    @Test func neverCheckedSitesAreReadLiveOnce() async throws {
+        let (store, workbench, bench) = try await store()
+        let unchecked = try Fixture.string("app-list").replacingOccurrences(of: #""sites_checked_at":"2026-09-26T10:00:00Z""#,
+                                                                             with: #""sites_checked_at":null"#)
+        base.cli.answer("app list", .ok(unchecked))
+        #expect(try !BenchJSON.decode(AppList.self, from: Data(unchecked.utf8)).sitesKnown)
+        store.setWindow(WindowSight(isOpen: true, isVisible: true))
+        await workbench.showApps(bench)
+        #expect(base.cli.calls.filter { $0.starts(with: ["app", "list"]) }
+            == [["app", "list", "--json", "--no-sites", "--bench-dir", base.benchPath],
+                ["app", "list", "--json", "--bench-dir", base.benchPath]])
+        #expect(workbench.apps[bench.path]?.sitesKnown == false, "the scripted CLI answers the same")
+        await workbench.showApps(bench)
+        #expect(appLists() == 2, "shown again: nothing new to ask")
     }
 
     /// The person switches tab while doctor runs: SwiftUI cancels the page's

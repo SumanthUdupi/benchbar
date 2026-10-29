@@ -185,6 +185,20 @@ nonisolated struct DoctorSummary: Codable, Sendable, Equatable {
     var ok: Int
     var warn: Int
     var fail: Int
+
+    /// "1 failure · 2 warnings", nil when nothing needs attention: the
+    /// popover and the Health tab say it the same way.
+    var attention: String? {
+        let parts = [Self.count(fail, "failure"), Self.count(warn, "warning")].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// "45 passing · 1 failure · 2 warnings", for the Health tab's header.
+    var text: String { (["\(ok) passing"] + [attention].compactMap { $0 }).joined(separator: " · ") }
+
+    private static func count(_ n: Int, _ word: String) -> String? {
+        n > 0 ? "\(n) \(word)\(n == 1 ? "" : "s")" : nil
+    }
 }
 
 /// `benchbar doctor --json`.
@@ -306,12 +320,18 @@ nonisolated struct AppInfo: Codable, Sendable, Equatable, Identifiable {
 nonisolated struct AppList: Codable, Sendable, Equatable {
     var schemaVersion: Int
     var bench: String
+    /// When bench was last asked which sites have which app; nil when it
+    /// never was, and then every app's `sites` is empty, not known.
+    var sitesCheckedAt: String?
     var sitesError: String?
     var apps: [AppInfo]
+
+    var sitesKnown: Bool { sitesCheckedAt != nil }
 
     enum CodingKeys: String, CodingKey {
         case bench, apps
         case schemaVersion = "schema_version"
+        case sitesCheckedAt = "sites_checked_at"
         case sitesError = "sites_error"
     }
 }

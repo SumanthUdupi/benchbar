@@ -151,13 +151,29 @@ nonisolated struct CLIClient: Sendable {
         return try BenchJSON.decode(AppList.self, from: Data(output.stdout.utf8))
     }
 
-    /// benchbar app add SOURCE: a name from the app registry or any git URL.
+    /// benchbar app add SOURCE --dry-run --json: the plan and its token. Read
+    /// only; it reads the remote (a shallow clone of hooks.py), so a private
+    /// repository is checked here and a missing key fails in seconds.
+    func addAppPlan(_ source: String, branch: String?, site: String?, bench: String) async throws(CLIError) -> AppAddPlan {
+        let output = try await run(["app", "add", source, "--dry-run", "--json", "--bench-dir", bench] + Self.addAppOptions(branch: branch, site: site),
+                                   timeout: Timeout.doctor, acceptExitCodes: [0])
+        return try BenchJSON.decode(AppAddPlan.self, from: Data(output.stdout.utf8))
+    }
+
+    /// benchbar app add SOURCE --apply TOKEN: runs the plan the person saw.
+    /// The CLI recomputes it under its lock and refuses a token that no
+    /// longer matches the bench; the arguments are the plan's.
     @discardableResult
-    func addApp(_ source: String, branch: String?, site: String?, bench: String) async throws(CLIError) -> CommandOutput {
-        var args = ["app", "add", source, "--yes", "--plain", "--bench-dir", bench]
+    func addApp(_ source: String, branch: String?, site: String?, token: String, bench: String) async throws(CLIError) -> CommandOutput {
+        let args = ["app", "add", source, "--apply", token, "--yes", "--plain", "--bench-dir", bench] + Self.addAppOptions(branch: branch, site: site)
+        return try await run(args, timeout: Timeout.long, acceptExitCodes: [0])
+    }
+
+    private static func addAppOptions(branch: String?, site: String?) -> [String] {
+        var args: [String] = []
         if let branch, !branch.isEmpty { args += ["--branch", branch] }
         if let site, !site.isEmpty { args += ["--site", site] }
-        return try await run(args, timeout: Timeout.long, acceptExitCodes: [0])
+        return args
     }
 
     @discardableResult
@@ -191,14 +207,24 @@ nonisolated struct CLIClient: Sendable {
         try await run(["app", "update", app, "--yes", "--plain", "--bench-dir", bench], timeout: Timeout.long, acceptExitCodes: [0])
     }
 
-    /// benchbar site add NAME: the Administrator password goes in the
-    /// environment of that one process (ADMIN_PASSWORD, as the CLI reads it),
-    /// never on a command line. The hosts line needs sudo, which a process
-    /// without a terminal cannot ask for: the CLI skips it and says so (the
-    /// Sites tab's Add Hosts Lines sheet runs `site hosts` for that).
+    /// benchbar site add NAME --dry-run --json: the plan and its token. Read
+    /// only: nothing is created, and it needs no password.
+    func addSitePlan(_ name: String, bench: String) async throws(CLIError) -> SiteAddPlan {
+        let output = try await run(["site", "add", name, "--dry-run", "--json", "--bench-dir", bench],
+                                   timeout: Timeout.query, acceptExitCodes: [0])
+        return try BenchJSON.decode(SiteAddPlan.self, from: Data(output.stdout.utf8))
+    }
+
+    /// benchbar site add NAME --apply TOKEN: runs the plan the person saw. The
+    /// CLI recomputes it and refuses a token that no longer matches the bench.
+    /// The Administrator password goes in the environment of that one process
+    /// (ADMIN_PASSWORD, as the CLI reads it), never on a command line. The
+    /// hosts line needs sudo, which a process without a terminal cannot ask
+    /// for: the CLI skips it and says so (the Sites tab's Add Hosts Lines
+    /// sheet runs `site hosts` for that).
     @discardableResult
-    func addSite(_ name: String, adminPassword: String, bench: String) async throws(CLIError) -> CommandOutput {
-        try await run(["site", "add", name, "--yes", "--plain", "--bench-dir", bench],
+    func addSite(_ name: String, adminPassword: String, token: String, bench: String) async throws(CLIError) -> CommandOutput {
+        try await run(["site", "add", name, "--apply", token, "--yes", "--plain", "--bench-dir", bench],
                       timeout: Timeout.long, acceptExitCodes: [0], extraEnvironment: ["ADMIN_PASSWORD": adminPassword])
     }
 
@@ -292,13 +318,29 @@ nonisolated struct CLIClient: Sendable {
     }
 
     /// The most useful lines of a failed run: [FAIL] and [WARN] lines first,
-    /// then the last lines of stderr and stdout.
+    /// then the last lines of stderr and stdout. Without the markers: the
+    /// app shows the level with its own symbol and color.
     static func summarize(_ output: CommandOutput) -> String {
         let lines = (output.stderr + "\n" + output.stdout)
             .split(separator: "\n", omittingEmptySubsequences: true)
             .map { $0.trimmingCharacters(in: .whitespaces) }
         let flagged = lines.filter { $0.hasPrefix("[FAIL]") || $0.hasPrefix("[WARN]") || $0.hasPrefix("Aborting.") }
         let chosen = flagged.isEmpty ? Array(lines.suffix(3)) : Array(flagged.prefix(3))
-        return chosen.joined(separator: "\n")
+        return CLIText.plain(chosen.joined(separator: "\n"))
+    }
+}
+
+/// The CLI's text as the app shows it.
+nonisolated enum CLIText {
+    static let markers = ["[OK]", "[WARN]", "[FAIL]"]
+
+    /// Each line without a leading `[OK]`, `[WARN]` or `[FAIL]`: those are
+    /// for Terminal and agents, and the app shows the level its own way.
+    static func plain(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+            let trimmed = line.drop { $0 == " " }
+            guard let marker = markers.first(where: { trimmed.hasPrefix($0) }) else { return String(line) }
+            return String(trimmed.dropFirst(marker.count).drop { $0 == " " })
+        }.joined(separator: "\n")
     }
 }

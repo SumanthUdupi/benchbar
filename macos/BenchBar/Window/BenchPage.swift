@@ -9,16 +9,21 @@ struct BenchPage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-                .padding(.horizontal, WindowMetrics.paneInset).padding(.top, 16).padding(.bottom, 10)
-            Picker("", selection: $router.benchTab) {
-                ForEach(BenchTab.allCases) { Text($0.rawValue).tag($0) }
+            // the column of the tab's Form below, which centers past its widest
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                    .padding(.top, 16).padding(.bottom, 10)
+                Picker("", selection: $router.benchTab) {
+                    ForEach(BenchTab.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pageTabs()
+                .labelsHidden()
+                ChangeResultBanner(workbench: workbench, scope: bench.path)
+                    .padding(.top, 10)
             }
-            .pageTabs()
-            .labelsHidden()
+            .frame(maxWidth: WindowMetrics.groupedFormMaxWidth, alignment: .leading)
             .padding(.horizontal, WindowMetrics.paneInset)
-            ChangeResultBanner(workbench: workbench, scope: bench.path)
-                .padding(.horizontal, WindowMetrics.paneInset).padding(.top, 10)
+            .frame(maxWidth: .infinity)
             Group {
                 switch router.benchTab {
                 case .overview: BenchOverview(store: store, workbench: workbench, bench: bench, router: router)
@@ -85,7 +90,7 @@ struct BenchOverview: View {
         Form {
             Section {
                 controlRow
-                if let since = bench.runningSince {
+                if let since = bench.upSince {
                     Uptime(since: since) { LabeledContent("Up for", value: $0) }
                 }
                 if let error = bench.lastError ?? bench.refreshError {
@@ -110,7 +115,7 @@ struct BenchOverview: View {
                     Text("Site and ports")
                     Spacer()
                     Button("Port Settings & Setup…") {
-                        let run = PortSetupRun(summaries: [bench.summary], store: store)
+                        let run = PortSetupRun(summaries: [bench.summary], store: store, opensSettings: true)
                         portSetup = run
                         Task { await run.loadPlan() }
                     }
@@ -146,8 +151,16 @@ struct BenchOverview: View {
 
     /// Start, stop and restart side by side, the site as the main action,
     /// the editor beside it and the rest in the "…" menu. Before the bench
-    /// is managed, Set Up Management… is the main action instead.
-    @ViewBuilder private var controlRow: some View {
+    /// is managed, Set Up Management… is the main action instead. Where
+    /// "Open in VS Code" does not fit whole, it moves into the "…" menu.
+    private var controlRow: some View {
+        ViewThatFits(in: .horizontal) {
+            controls(editorInMenu: false)
+            controls(editorInMenu: true)
+        }
+    }
+
+    @ViewBuilder private func controls(editorInMenu: Bool) -> some View {
         let defaultNeedsHosts = bench.siteRows.first(where: \.isDefault)?.needsHosts == true
         let editor = store.settings.editor
         HStack(spacing: WindowMetrics.rowSpacing) {
@@ -170,19 +183,22 @@ struct BenchOverview: View {
                 }
                 .fixedSize()
             }
-            Spacer()
-            Button { if let editor { Workspace.openInEditor(bench, editor: editor) } } label: {
-                Label(editor.map { "Open in \($0.name)" } ?? "Open in Editor", systemImage: "chevron.left.forwardslash.chevron.right")
+            Spacer(minLength: WindowMetrics.rowSpacing)
+            if !editorInMenu {
+                editorButton(editor).fixedSize()
             }
-            .disabled(editor == nil)
-            .help(editor == nil ? "Install VS Code or Cursor to open the bench folder in it." : bench.path)
             Button(defaultNeedsHosts ? "Set Up Site…" : "Open Site") {
                 if defaultNeedsHosts { router.benchTab = .sites }
                 else { Workspace.openSite(bench) }
             }
             .primaryAction(!bench.needsService)
             .disabled(bench.state != .running && !defaultNeedsHosts)
-            MoreMenu(help: "Console, database, Finder and the bench path") {
+            .fixedSize()
+            MoreMenu(help: editorInMenu ? "The editor, console, database, Finder and the bench path" : "Console, database, Finder and the bench path") {
+                if editorInMenu {
+                    editorButton(editor)
+                    Divider()
+                }
                 Button { Workspace.openShell(.console, site: bench.summary.site, bench: bench, store: store) } label: {
                     Label("Open Console", systemImage: "terminal")
                 }
@@ -196,6 +212,14 @@ struct BenchOverview: View {
                 Button("Copy Path", systemImage: "doc.on.doc") { Workspace.copy(bench.path) }
             }
         }
+    }
+
+    private func editorButton(_ editor: Editor?) -> some View {
+        Button { if let editor { Workspace.openInEditor(bench, editor: editor) } } label: {
+            Label(editor.map { "Open in \($0.name)" } ?? "Open in Editor", systemImage: "chevron.left.forwardslash.chevron.right")
+        }
+        .disabled(editor == nil)
+        .help(editor == nil ? "Install VS Code or Cursor to open the bench folder in it." : bench.path)
     }
 
     private func openRequestedSetup() {
@@ -295,10 +319,7 @@ struct BenchSites: View {
             SiteDropSheet(workbench: workbench, bench: bench, site: target.site) { dropping = nil }
         }
         .sheet(isPresented: $addingSite) {
-            AddSiteSheet(bench: bench) { name, password in
-                addingSite = false
-                Task { await workbench.addSite(name, adminPassword: password, on: bench) }
-            } cancel: { addingSite = false }
+            AddSiteSheet(workbench: workbench, bench: bench) { addingSite = false }
         }
     }
 }
@@ -376,35 +397,112 @@ struct SiteMenu: View {
     }
 }
 
+/// Fill in the site, Review reads the CLI's plan (`site add --dry-run
+/// --json`), Add Site runs it by its token. A token the CLI refuses (the
+/// bench changed since) shows here, with Review Again; any other failure
+/// closes the sheet and the change banner has it.
 struct AddSiteSheet: View {
+    /// What the sheet starts with: empty for a person, filled for a render.
+    struct Start {
+        var name = ""
+        var password = ""
+        var flow = PlanReviewFlow<SiteAddPlan>()
+    }
+
+    let workbench: Workbench
     let bench: BenchModel
-    let add: (String, String) -> Void
-    let cancel: () -> Void
-    @State private var name = ""
-    @State private var password = ""
-    @State private var confirm = ""
+    let close: () -> Void
+    @State private var name: String
+    @State private var password: String
+    @State private var confirm: String
+    @State private var flow: PlanReviewFlow<SiteAddPlan>
+
+    init(workbench: Workbench, bench: BenchModel, start: Start = Start(), close: @escaping () -> Void) {
+        self.workbench = workbench
+        self.bench = bench
+        self.close = close
+        _name = State(initialValue: start.name)
+        _password = State(initialValue: start.password)
+        _confirm = State(initialValue: start.password)
+        _flow = State(initialValue: start.flow)
+    }
 
     private var nameValid: Bool { SiteName.isValid(name) && !bench.siteRows.contains { $0.name == name } }
     private var passwordValid: Bool { !password.isEmpty && password == confirm }
 
+    private var phase: SheetPhase {
+        switch flow.stage {
+        case .form:
+            if let error = flow.readError { .failed(error, title: "\(name) cannot be added") } else { .ready }
+        case .reading: .loading("Reading the plan from benchbar…")
+        case .reviewing: .ready
+        case .applying: .running("Creating \(name)…")
+        case .stale: .failed("Nothing was changed. Review the plan again to see what it is now.", title: "The bench changed since this plan was shown")
+        }
+    }
+
     var body: some View {
         SheetScaffold("Add a Site to \(bench.name)",
-                      explanation: "A new site on the same MariaDB, with only Frappe installed. Add apps from the Apps tab afterwards.") {
-            Form {
-                TextField("Site name", text: $name, prompt: Text("mysite"))
-                if !name.isEmpty && !SiteName.isValid(name) {
-                    Text(SiteName.rule).font(.caption).foregroundStyle(.red)
-                }
-                SecureField("Administrator password", text: $password)
-                SecureField("Confirm password", text: $confirm)
+                      explanation: flow.plan == nil
+                          ? "A new site on the same MariaDB, with only Frappe installed. Add apps from the Apps tab afterwards."
+                          : "Nothing has run yet. These are the steps; Add Site runs exactly this plan.",
+                      phase: phase, width: flow.plan == nil ? .regular : .wide) {
+            if let plan = flow.plan {
+                SiteAddPlanView(plan: plan)
+            } else if flow.stage != .reading, !isStale {
+                form
             }
-            .formStyle(.columns)
-            SheetNote("The password goes to the benchbar process only, never on a command line or to disk. The MariaDB password comes from your Keychain.")
+        } leading: {
+            if case .reviewing = flow.stage {
+                Button("Back") { flow.edit() }
+            }
         } actions: {
-            CancelButton(action: cancel)
-            Button("Add Site") { add(name, password) }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!nameValid || !passwordValid)
+            switch flow.stage {
+            case .form, .reading:
+                CancelButton(action: close)
+                Button("Review") { review() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!nameValid || !passwordValid || flow.stage == .reading)
+            case .reviewing(let plan):
+                CancelButton(action: close)
+                Button("Add Site") { apply() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!plan.canRun)
+            case .applying:
+                EmptyView()
+            case .stale:
+                CancelButton(action: close)
+                Button("Review Again") { review() }.keyboardShortcut(.defaultAction)
+            }
+        }
+    }
+
+    private var isStale: Bool { if case .stale = flow.stage { true } else { false } }
+
+    @ViewBuilder private var form: some View {
+        Form {
+            TextField("Site name", text: $name, prompt: Text("mysite"))
+            if !name.isEmpty && !SiteName.isValid(name) {
+                Text(SiteName.rule).font(.caption).foregroundStyle(.red)
+            }
+            SecureField("Administrator password", text: $password)
+            SecureField("Confirm password", text: $confirm)
+        }
+        .formStyle(.columns)
+        SheetNote("The password goes to the benchbar process only, never on a command line or to disk. The MariaDB password comes from your Keychain.")
+    }
+
+    private func review() {
+        guard flow.review() else { return }
+        Task { flow.read(await workbench.addSitePlan(name, on: bench)) }
+    }
+
+    private func apply() {
+        guard let plan = flow.apply() else { return }
+        Task {
+            let error = await workbench.addSite(name, adminPassword: password, token: plan.token, on: bench)
+            // a stale token is answered here, with Review Again, not in the banner
+            if flow.finish(error: error) { close() } else { workbench.result = nil }
         }
     }
 }
