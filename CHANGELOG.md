@@ -24,8 +24,8 @@ All notable changes to this project are documented here.
   Find User window; pinned users are kept in `config.json`.
 - **Quick Switch** (⌃⌥U on macOS, Ctrl+Alt+U on Windows): a small list
   of Switch Back, your pinned users and Administrator opens over any app.
-  ↑ ↓ choose, ↩ switches, ⎋ closes, typing searches the site's users and
-  ⇥ moves to the next site, all without the mouse. ⌃⌥U then ↩ toggles
+  ↑ ↓ choose, ↩ switches, Esc closes, typing searches the site's users and
+  ⇥ moves to the next bench, all without the mouse. ⌃⌥U then ↩ toggles
   between the last two users. On by default; Settings (macOS) or the tray
   menu (Windows) turns it off and says when another app holds the key.
 

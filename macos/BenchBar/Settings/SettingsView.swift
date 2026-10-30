@@ -247,7 +247,7 @@ struct SettingsView: View {
             }
             Toggle(isOn: $settings.quickSwitchEnabled) {
                 Text("Quick Switch: ⌃⌥U")
-                Text("From any app, ⌃⌥U lists your pinned users: ↑ ↓ then ↩ switches, ⇥ changes site, ⎋ closes. It uses no Accessibility permission.")
+                Text("From any app, ⌃⌥U lists your pinned users: ↑ ↓ then ↩ switches, ⇥ moves to the next bench, esc closes. It uses no Accessibility permission.")
                 if settings.quickSwitchEnabled && settings.quickSwitchConflict {
                     Text("⌃⌥U is used by another app")
                         .foregroundStyle(.red)
