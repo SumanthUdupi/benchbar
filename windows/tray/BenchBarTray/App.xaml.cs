@@ -305,6 +305,9 @@ public partial class App : Application, ITrayHost
         if (url is null) return error ?? "The site could not be opened.";
         // ShellExecute with the URL as one string: it holds `&`, which `cmd /c start` would split on
         OpenUrl(url.AbsoluteUri);
+        // a switch from Find User leaves a warm flyout showing the previous "as {label}" until the next poll
+        if (_controller is { } controller)
+            _flyout?.View.SetSnapshot(controller.Snapshot, TrayController.UpText(controller.Snapshot, controller.Benches.Select(b => b.State).ToList()));
         return null;
     }
 

@@ -359,7 +359,8 @@ public class OpenAsTests
 
         Assert.Equal("u@x.com", who);
         var request = Assert.Single(handler.Requests);
-        Assert.Equal("http://a.localhost:8000/api/method/frappe.auth.get_logged_user", request.RequestUri!.AbsoluteUri);
+        Assert.Equal("http://127.0.0.1:8000/api/method/frappe.auth.get_logged_user", request.RequestUri!.AbsoluteUri);
+        Assert.Equal("a.localhost:8000", request.Headers.Host);
         Assert.Equal("sid=S1", Assert.Single(request.Headers.GetValues("Cookie")));
     }
 

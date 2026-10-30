@@ -20,7 +20,13 @@ public sealed class OpenAsService(
     public const string UnsupportedMessage = "This benchbar does not support \"Open as\". Update the BenchBar CLI.";
     public const string UnreadableMessage = "benchbar answered with something the tray could not read.";
 
-    private sealed record Session(string BaseUrl, string Sid, string LandingPath);
+    // A class, not a record: a record's generated ToString would print the session id.
+    private sealed class Session(string baseUrl, string sid, string landingPath)
+    {
+        public string BaseUrl { get; } = baseUrl;
+        public string Sid { get; } = sid;
+        public string LandingPath { get; } = landingPath;
+    }
 
     private readonly object _gate = new();
     private readonly Dictionary<string, Session> _sessions = [];
@@ -157,10 +163,14 @@ public sealed class OpenAsService(
     }
 
     /// <summary>The <c>frappe.auth.get_logged_user</c> check: the logged-in user of <paramref name="sid"/>, or null (Guest answers "Guest").</summary>
+    /// <remarks>Asked of 127.0.0.1 with the site as the Host header, as frappe tells sites apart: a
+    /// browser resolves <c>*.localhost</c> itself, Windows name resolution may not.</remarks>
     public static async Task<string?> CheckSessionAsync(
         HttpClient http, Uri baseUrl, string sid, TimeSpan timeout, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(baseUrl, "/api/method/frappe.auth.get_logged_user"));
+        var loopback = new UriBuilder(baseUrl) { Host = "127.0.0.1", Path = "/api/method/frappe.auth.get_logged_user" }.Uri;
+        using var request = new HttpRequestMessage(HttpMethod.Get, loopback);
+        request.Headers.Host = baseUrl.Authority;
         request.Headers.TryAddWithoutValidation("Cookie", "sid=" + sid);
         using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
         limit.CancelAfter(timeout);
@@ -188,7 +198,7 @@ public sealed class OpenAsService(
             var who = await checkSession(new Uri(session.BaseUrl), session.Sid, ct).ConfigureAwait(false);
             return string.Equals(who, user, StringComparison.OrdinalIgnoreCase);
         }
-        catch (Exception ex) when ((ex is HttpRequestException or TaskCanceledException) && !ct.IsCancellationRequested)
+        catch (Exception ex) when ((ex is HttpRequestException or OperationCanceledException or IOException) && !ct.IsCancellationRequested)
         {
             // unreachable site or the 2 s limit: treat as dead, the CLI will say what is wrong
             return false;
