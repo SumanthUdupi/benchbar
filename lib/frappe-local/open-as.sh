@@ -28,7 +28,8 @@
 FL_PY_OPEN_AS='import sys
 site, user = sys.argv[2], sys.argv[3]
 def say(tag, *fields):
-    print(tag + " " + "\t".join(" ".join(str(f or "").split()) for f in fields), flush=True)
+    clean = [str(f or "").replace("\t", " ").replace("\r", " ").replace("\n", " ") for f in fields]
+    print("\n" + tag + " " + "\t".join(clean), flush=True)
 import frappe
 from frappe.auth import CookieManager, LoginManager, validate_ip_address
 frappe.init(site=site)
@@ -155,21 +156,38 @@ fl_path_without_sid_v() {
   while [[ -n "$__query" ]]; do
     __part="${__query%%&*}"
     if [[ "$__query" == *"&"* ]]; then __query="${__query#*&}"; else __query=""; fi
-    [[ -z "$__part" || "$__part" == sid=* ]] || __kept="${__kept:+${__kept}&}${__part}"
+    [[ -z "$__part" || "$__part" == sid || "$__part" == sid=* ]] || __kept="${__kept:+${__kept}&}${__part}"
   done
   printf -v "$1" '%s' "${__p}${__kept:+?${__kept}}${__frag}"
 }
 
 # fl_open_as_require_reachable SITE: the bench answers and the browser can
 # find SITE by name (a hosts line, or a *.localhost name, which resolves
-# without one)
+# without one). In WSL the browser is Windows', which reads its own hosts
+# file and not the distro's, so only localhost names are sure to reach it.
 fl_open_as_require_reachable() {
   if [[ -z "$(fl_port_listener_pid "$FL_WEB_PORT")" || -z "$(fl_port_listener_pid "$FL_REDIS_CACHE_PORT")" ]]; then
     fl_die "The bench is not running." "Start it first: benchup"
   fi
+  if [[ "$1" != localhost && "$1" != *.localhost ]] && declare -F fl_is_wsl >/dev/null && fl_is_wsl; then
+    fl_die "$1 is not a *.localhost name, so the Windows browser cannot reach it from WSL." "Use a site named NAME.localhost, or add it to the Windows hosts file and use --print-url"
+  fi
   if [[ "$1" != localhost && "$1" != *.localhost ]] && ! fl_hosts_has_name "$1"; then
     fl_die "$1 has no hosts line, so the browser cannot reach it." "Add it: benchbar site hosts"
   fi
+}
+
+# fl_open_as_require_served SITE: the bench's web process answers as SITE.
+# `bench serve` without --site serves the default_site of
+# common_site_config.json for every Host, so a session made on any other
+# site is unknown to the site the browser reaches, which then shows the
+# login page.
+fl_open_as_require_served() {
+  local served
+  fl_site_config_value_v served default_site
+  [[ -z "$served" || "$served" == "$1" ]] && return 0
+  fl_die "Port ${FL_WEB_PORT} serves only ${served}, the bench's default site, so a sign-in on $1 would land logged out." \
+    "Open as works on ${served}. To use $1: benchbar site default $1, then benchrestart"
 }
 
 fl_cmd_open() {
@@ -186,9 +204,11 @@ fl_cmd_open() {
     esac
   done
   fl_require_bench
+  [[ -n "$site" ]] || fl_die "This bench has no default site." "Pass --site NAME (benchbar site list shows them)"
   fl_site_require "$site"
   fl_open_as_require_reachable "$site"
   if [[ -n "$user" ]]; then
+    fl_open_as_require_served "$site"
     fl_site_developer_mode "$site" \
       || fl_die "${site} is not in developer mode, so benchbar will not sign in as another user." "On a development site: bench --site ${site} set-config developer_mode 1"
     [[ "$user" != "Guest" ]] || fl_die "Guest has no session to open." "Open the site without --as instead."
@@ -214,7 +234,7 @@ fl_cmd_open() {
     url="${base}/login?redirect-to=${enc}&sid=${sid}&t=$(date +%s)"
   fi
   if [[ "$browser" == "1" ]]; then
-    if fl_open_url "$url"; then opened=true
+    if fl_open_url "$url" >/dev/null; then opened=true
     else
       fl_die "No program here opens a browser ($(fl_open_cmd))." "Open the site yourself, or run: benchbar open --print-url"
     fi
@@ -250,6 +270,7 @@ fl_cmd_users() {
   done
   [[ "$limit" =~ ^[0-9]+$ ]] && [[ "$limit" -ge 1 && "$limit" -le 500 ]] || fl_die "--limit needs a number from 1 to 500." "Example: --limit 50"
   fl_require_bench
+  [[ -n "$site" ]] || fl_die "This bench has no default site." "Pass --site NAME (benchbar site list shows them)"
   fl_site_require "$site"
   [[ -n "$(fl_port_listener_pid "$FL_REDIS_CACHE_PORT")" ]] || fl_die "The bench is not running." "Start it first: benchup"
   if [[ "$OPT_JSON" == "1" ]]; then

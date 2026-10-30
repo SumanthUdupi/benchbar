@@ -212,8 +212,14 @@ workflow actions it gets. Without `--site`, the bench's default site;
 without `--path`, `/app` (or `/` for a Website User).
 
 `--as` works only on a site with `developer_mode` on (its `site_config.json`,
-else `common_site_config.json`), for Administrator too, and only while the
-bench runs. It starts a Frappe session for the user the way
+else `common_site_config.json`), for Administrator too, only while the bench
+runs, and only on the site the web process answers as: `bench serve` serves
+the `default_site` of `common_site_config.json` for every name, so on a
+bench with one that is the only site you can sign in on
+(`benchbar site default NAME`, then `benchrestart`, moves it). Inside WSL
+the browser is Windows', which reads its own hosts file, so the site must
+be a `*.localhost` name. Plain `open` (no `--as`) needs the bench running
+and a name the browser can reach as well. It starts a Frappe session for the user the way
 `bench browse --user` does and opens `/login?redirect-to=PATH&sid=…`;
 frappe sets the cookie and sends the browser on to PATH, so the session id
 does not stay in the address bar. It stays in the browser's history and the
@@ -224,6 +230,7 @@ What a sign-in does on the site, as a real login would: the user's
 only the newest sessions of that user (`simultaneous_sessions`, 2 by
 default), so an older one (another browser, a test run) can be signed out.
 IP and login-hour restrictions on the user apply; two-factor login does not.
+A site with `deny_multiple_sessions` on signs that user out everywhere else.
 
 `--print-url` prints the link instead of opening it (in `--json` as `url`);
 the link holds the session id, so treat it like a password. `--json` without

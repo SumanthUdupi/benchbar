@@ -123,17 +123,37 @@ assert_calls_contain '^open http://v16dev:8000$'
 assert_calls_not_contain '^bench-python'
 printf '{\n "db_name": "_v16dev",\n "developer_mode": 1\n}\n' >"$BENCH/sites/v16dev/site_config.json"
 
-# ---- a second site: no hosts line is fine for *.localhost, refused otherwise
+# ---- a second site. bench serve answers as the default_site of
+# common_site_config.json for every name, so --as on another site is refused
+# with the way out; plain open is not a sign-in and stays allowed
 mkdir -p "$BENCH/sites/two.localhost" "$BENCH/sites/three"
 printf '{\n "developer_mode": 1\n}\n' >"$BENCH/sites/two.localhost/site_config.json"
 printf '{\n "developer_mode": 1\n}\n' >"$BENCH/sites/three/site_config.json"
 reset_calls
 run_fm open --site two.localhost --as priya@example.com --bench-dir "$BENCH"
+assert_eq "1" "$CODE" "$OUT"
+assert_contains "$OUT" "Port 8000 serves only v16dev, the bench's default site, so a sign-in on two.localhost would land logged out."
+assert_contains "$OUT" "benchbar site default two.localhost, then benchrestart"
+assert_calls_not_contain '^bench-python'
+run_fm open --site two.localhost --no-browser --bench-dir "$BENCH"
+assert_eq "0" "$CODE" "$OUT"
+run_fm open --site three --as priya@example.com --bench-dir "$BENCH"
+assert_eq "1" "$CODE"; assert_contains "$OUT" "three has no hosts line"; assert_contains "$OUT" "benchbar site hosts"
+# made the default, a *.localhost site needs no hosts line and its own name and port flow through
+cp "$BENCH/sites/common_site_config.json" "$TMP_DIR/common.orig"
+sed_inplace 's/"default_site": "v16dev"/"default_site": "two.localhost"/' "$BENCH/sites/common_site_config.json"
+reset_calls
+run_fm open --site two.localhost --as priya@example.com --bench-dir "$BENCH"
 assert_eq "0" "$CODE" "$OUT"
 assert_calls_contain '^open http://two.localhost:8000/login\?redirect-to=%2Fapp&sid='
 assert_calls_contain '^bench-python benchbar-open-as \[two.localhost\] \[priya@example.com\]$'
-run_fm open --site three --as priya@example.com --bench-dir "$BENCH"
-assert_eq "1" "$CODE"; assert_contains "$OUT" "three has no hosts line"; assert_contains "$OUT" "benchbar site hosts"
+cp "$TMP_DIR/common.orig" "$BENCH/sites/common_site_config.json"
+
+# ---- a path with a bare sid and empty parameters: both go
+reset_calls
+run_fm open --as priya@example.com --path '/app/x?a=1&&sid&b=2' --bench-dir "$BENCH"
+assert_eq "0" "$CODE" "$OUT"
+assert_calls_contain '^open http://v16dev:8000/login\?redirect-to=%2Fapp%2Fx%3Fa%3D1%26b%3D2&sid='
 
 # ---- a second run works the same (a launch has no "unchanged")
 reset_calls
@@ -146,17 +166,25 @@ assert_eq "0" "$CODE" "$OUT"; assert_eq "2" "$(grep -c '^open ' "$MOCK_LOG")"
 MOCK_OPEN_EXIT=127 run_fm open --as priya@example.com --bench-dir "$BENCH"
 assert_eq "1" "$CODE"; assert_contains "$OUT" "benchbar open --print-url"
 
-# ---- Linux opens with xdg-open, WSL with wslview (the Windows browser); a
+# ---- Linux opens with xdg-open, WSL with wslview (the Windows browser). A
 # Linux bench's sites are *.localhost names, which resolve without a hosts line
 use_linux
+sed_inplace 's/"default_site": "v16dev"/"default_site": "two.localhost"/' "$BENCH/sites/common_site_config.json"
 reset_calls
 run_fm open --site two.localhost --as priya@example.com --bench-dir "$BENCH"
 assert_eq "0" "$CODE" "$OUT"
 assert_calls_contain '^wslview http://two.localhost:8000/login\?redirect-to=%2Fapp&sid=mocksid0123456789&t=[0-9]+$'
+# WSL: the Windows browser reads Windows' hosts file, so only localhost names are offered
+printf '127.0.0.1 three\n' >>"$FL_HOSTS_FILE"
+run_fm open --site three --as priya@example.com --bench-dir "$BENCH"
+assert_eq "1" "$CODE"; assert_contains "$OUT" "three is not a *.localhost name, so the Windows browser cannot reach it from WSL."
 printf 'Linux version 6.8.0-45-generic (buildd@lcy02) #45-Ubuntu SMP\n' >"$FL_PROC_VERSION"
 reset_calls
 run_fm open --site two.localhost --as priya@example.com --bench-dir "$BENCH"
 assert_eq "0" "$CODE" "$OUT"
 assert_calls_contain '^xdg-open http://two.localhost:8000/login\?redirect-to=%2Fapp&sid='
+# a browser opener that talks on stdout (Chrome: "Opening in existing browser session.") leaves --json clean
+OUT_JSON="$(MOCK_OPEN_SAYS="Opening in existing browser session." "$FM" open --site two.localhost --as priya@example.com --json --bench-dir "$BENCH" 2>/dev/null)"
+assert_eq "True" "$(printf '%s' "$OUT_JSON" | jget - 'd["opened"]')" "(stdout is the JSON document alone)"
 
 echo "PASS test-open-as"
