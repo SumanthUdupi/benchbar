@@ -51,7 +51,8 @@ func TestForwardArgvShape(t *testing.T) {
 }
 
 func TestForwardHelpAndVersionAreForwarded(t *testing.T) {
-	for _, args := range [][]string{{"--version"}, {"help"}, {"mcp"}, {"up"}, {"down"}, {"status", "--json"}, {"doctor", "--json"}, {}} {
+	for _, args := range [][]string{{"--version"}, {"help"}, {"mcp"}, {"up"}, {"down"}, {"status", "--json"}, {"doctor", "--json"}, {},
+		{"open", "--site", "x", "--as", "a+b@x.com", "--print-url", "--json"}, {"users", "--search", "o'brien x"}} {
 		e := newEnv(t)
 		e.run(args...)
 		st := e.starts()
@@ -284,20 +285,26 @@ func runShimProc(t *testing.T, extra []string, stdin []byte, args ...string) shi
 }
 
 func TestQuotingKeepsEveryArgument(t *testing.T) {
-	record := filepath.Join(t.TempDir(), "rec.jsonl")
-	r := runShimProc(t, []string{"FAKE_WSL_MODE=exit:0", "FAKE_WSL_RECORD=" + record}, nil, trickyArgs...)
-	if r.code != 0 {
-		t.Fatalf("exit %d stderr %q", r.code, r.stderr)
-	}
-	st := readEvents(t, record)
-	if len(st) != 1 {
-		t.Fatalf("%d calls", len(st))
-	}
-	want := append([]string{"/bin/sh", "-c", wantWrapper, "benchbar"}, trickyArgs...)
-	if !reflect.DeepEqual(st[0].Exec, want) {
-		for i := range want {
-			if i >= len(st[0].Exec) || st[0].Exec[i] != want[i] {
-				t.Errorf("arg %d: got %q want %q", i, st[0].Exec[min(i, len(st[0].Exec)-1)], want[i])
+	for _, args := range [][]string{
+		trickyArgs,
+		{"open", "--site", "x", "--as", "a+b@x.com", "--print-url", "--json"},
+		{"users", "--search", "o'brien x"},
+	} {
+		record := filepath.Join(t.TempDir(), "rec.jsonl")
+		r := runShimProc(t, []string{"FAKE_WSL_MODE=exit:0", "FAKE_WSL_RECORD=" + record}, nil, args...)
+		if r.code != 0 {
+			t.Fatalf("exit %d stderr %q", r.code, r.stderr)
+		}
+		st := readEvents(t, record)
+		if len(st) != 1 {
+			t.Fatalf("%d calls", len(st))
+		}
+		want := append([]string{"/bin/sh", "-c", wantWrapper, "benchbar"}, args...)
+		if !reflect.DeepEqual(st[0].Exec, want) {
+			for i := range want {
+				if i >= len(st[0].Exec) || st[0].Exec[i] != want[i] {
+					t.Errorf("arg %d: got %q want %q", i, st[0].Exec[min(i, len(st[0].Exec)-1)], want[i])
+				}
 			}
 		}
 	}
