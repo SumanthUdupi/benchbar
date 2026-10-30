@@ -106,6 +106,8 @@ SCRIPT_DIR="$(fl_resolve_self)"
 . "${SCRIPT_DIR}/lib/frappe-local/site-backups.sh"
 # shellcheck source=lib/frappe-local/consoles.sh
 . "${SCRIPT_DIR}/lib/frappe-local/consoles.sh"
+# shellcheck source=lib/frappe-local/open-as.sh
+. "${SCRIPT_DIR}/lib/frappe-local/open-as.sh"
 # shellcheck source=lib/frappe-local/apps.sh
 . "${SCRIPT_DIR}/lib/frappe-local/apps.sh"
 # shellcheck source=lib/frappe-local/freshness.sh
@@ -243,6 +245,10 @@ Daily
                       the default site also needs --new-default OTHER (--dry-run, --json).
   console             bench --site SITE console: a Python shell with frappe (--site S).
   db                  bench --site SITE mariadb: the site's database with its own user (--site S).
+  open                Open the site in the browser (--site S, --path /app/...). --as USER signs in
+                      as that user, no password (developer_mode sites only); --print-url prints the
+                      link instead.
+  users               Enabled users of a site for open --as (--site S, --search TEXT, --limit N).
   mariadb-password    Print the MariaDB root password (Keychain; a 0600 file on Linux; asks first).
   mcp                 Model Context Protocol server on stdio for coding agents
                       (claude mcp add benchbar -- benchbar mcp). Read tools, up, down, restart,
@@ -1378,6 +1384,8 @@ case "$COMMAND" in
   path) fl_context_init "$OPT_BENCH_DIR" "$OPT_SITE" "$OPT_PROFILE"; printf '%s\n' "$FL_BENCH_DIR" ;;
   console) fl_context_init "$OPT_BENCH_DIR" "$OPT_SITE" "$OPT_PROFILE"; fl_cmd_console ${ARGS[@]+"${ARGS[@]}"} ;;
   db) fl_context_init "$OPT_BENCH_DIR" "$OPT_SITE" "$OPT_PROFILE"; fl_cmd_db ${ARGS[@]+"${ARGS[@]}"} ;;
+  open) fl_context_init "$OPT_BENCH_DIR" "$OPT_SITE" "$OPT_PROFILE"; fl_cmd_open ${ARGS[@]+"${ARGS[@]}"} ;;
+  users) fl_context_init "$OPT_BENCH_DIR" "$OPT_SITE" "$OPT_PROFILE"; fl_cmd_users ${ARGS[@]+"${ARGS[@]}"} ;;
   site) fl_context_init "$OPT_BENCH_DIR" "$OPT_SITE" "$OPT_PROFILE"; fl_cmd_site ${ARGS[@]+"${ARGS[@]}"} ;;
   app) fl_context_init "$OPT_BENCH_DIR" "$OPT_SITE" "$OPT_PROFILE"; fl_cmd_app ${ARGS[@]+"${ARGS[@]}"} ;;
   profile) fl_cmd_profile ${ARGS[@]+"${ARGS[@]}"} ;;

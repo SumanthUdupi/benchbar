@@ -58,6 +58,7 @@ struct SettingsView: View {
                         if !Updater.isAvailable { updatesSection }
                         cliSection
                         editorSection
+                        openAsSection
                         shortcutsSection.id(Self.shortcutsID)
                     case .menuBar:
                         previewSection
@@ -201,6 +202,8 @@ struct SettingsView: View {
         (BenchShortcut.folder.action, BenchShortcut.folder.display),
         (BenchShortcut.health.action, BenchShortcut.health.display),
         (BenchShortcut.manage.action, BenchShortcut.manage.display),
+        ("Open as Administrator, a pinned user, or back", "⌘0  ⌘1–⌘9  \(OpenAsShortcut.switchBack.display)"),
+        ("Quick Switch, from any app", "⌃⌥U"),
     ]
 
     // MARK: general
@@ -233,6 +236,25 @@ struct SettingsView: View {
         } footer: {
             Text("Your benches run as their own login agents, so they keep running when BenchBar is closed.")
                 .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var openAsSection: some View {
+        Section {
+            Toggle(isOn: $settings.keepPage) {
+                Text("Keep the page I'm on")
+                Text("Open as… sends your browser's current tab for that site to the new user, so you stay on the same page. macOS asks once to let BenchBar control the browser. Safari, Chrome, Arc, Brave and Edge only.")
+            }
+            Toggle(isOn: $settings.quickSwitchEnabled) {
+                Text("Quick Switch: ⌃⌥U")
+                Text("From any app, ⌃⌥U lists your pinned users: ↑ ↓ then ↩ switches, ⇥ moves to the next bench, esc closes. It uses no Accessibility permission.")
+                if settings.quickSwitchEnabled && settings.quickSwitchConflict {
+                    Text("⌃⌥U is used by another app")
+                        .foregroundStyle(.red)
+                }
+            }
+        } header: {
+            Text("Open as…")
         }
     }
 

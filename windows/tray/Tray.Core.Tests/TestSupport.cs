@@ -154,6 +154,18 @@ internal sealed class ScriptedSource : IBenchSource, ILoadSource
         return Task.FromResult(Result);
     }
 
+    /// <summary>What <see cref="RunForOutputAsync"/> answers; a test sets it, or <see cref="OutputFails"/>, per call.</summary>
+    public Func<string[], string> Output { get; set; } = _ => "{}";
+    public Exception? OutputFails { get; set; }
+    public List<string[]> OutputCalls { get; } = [];
+
+    public Task<string> RunForOutputAsync(string[] args, CancellationToken ct)
+    {
+        lock (OutputCalls) OutputCalls.Add(args);
+        if (OutputFails is not null) throw OutputFails;
+        return Task.FromResult(Output(args));
+    }
+
     public Task<DoctorReport> DoctorAsync(string benchPath, CancellationToken ct) => Task.FromResult(new DoctorReport(benchPath, null, [], 0, 0, 0));
 
     public Task<LogTail> LogsAsync(string benchPath, CancellationToken ct, int lines = 300) => Task.FromResult(new LogTail(null, []));

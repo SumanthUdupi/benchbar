@@ -16,11 +16,14 @@ public partial class App : Application, ITrayHost
     private const string MutexName = @"Local\BenchBarTray";
     private const string OpenEventName = @"Local\BenchBarTray.Open";
     private const string HelpUrl = "https://benchbar.akashmishra.com/windows/";
+    private const string BrowserFailedMessage = "Could not open your browser. Check that Windows has a default browser, then try again.";
+    private static readonly TimeSpan SessionCheckTimeout = TimeSpan.FromSeconds(2);
 
     private readonly ErrorLog _log = new();
     private readonly StartupShortcut _startup = new();
     private readonly Dictionary<string, LogsWindow> _logs = [];
     private readonly Dictionary<string, DoctorWindow> _doctors = [];
+    private readonly Dictionary<string, FindUserWindow> _findUsers = [];
     private Mutex? _mutex;
     private EventWaitHandle? _openEvent;
     private RegisteredWaitHandle? _openWait;
@@ -32,6 +35,12 @@ public partial class App : Application, ITrayHost
     private TrayMenu? _menu;
     private IBenchSource? _source;
     private IDistroProbe? _probe;
+    private HttpClient? _openAsHttp;
+    private OpenAsService? _openAsService;
+    private HotKey? _hotKey;
+    private bool _quickSwitchTaken;
+    private QuickSwitchWindow? _quickSwitch;
+    private (string BenchPath, string Site)? _lastQuickSwitch;
     private static readonly TimeSpan FlyoutKeepAlive = TimeSpan.FromSeconds(30);
     private readonly System.Windows.Threading.DispatcherTimer _releaseFlyout = new(System.Windows.Threading.DispatcherPriority.Background) { Interval = FlyoutKeepAlive };
     private long _flyoutHiddenAt;
@@ -109,6 +118,7 @@ public partial class App : Application, ITrayHost
 
         _releaseFlyout.Tick += (_, _) => ReleaseFlyout();
         _controller.Start();
+        ApplyQuickSwitch();
     }
 
     // --- single instance ---
@@ -252,8 +262,199 @@ public partial class App : Application, ITrayHost
         VsCodeAvailable = () => VsCode.Find() is not null,
         StartDistro = () => _controller!.StartDistro(),
         CopyText = CopyText,
-        OpenUrl = OpenUrl,
+        OpenUrl = url => OpenUrl(url),
+        OpenAsItems = OpenAsItemsFor,
+        OpenAsLabel = (bench, site) => OpenAsSvc?.CurrentLabel(bench.Path, site, _config.PinsFor(bench.Path, site)),
+        OpenAs = (bench, site, user) => SwitchUserAsync(bench, site, user, CancellationToken.None),
+        FindUser = ShowFindUser,
     };
+
+    // --- Open as ---
+
+    /// <summary>Created on first use. Cookies are off: the session check sends its own <c>Cookie</c> header and must not keep what the site sets.</summary>
+    private OpenAsService? OpenAsSvc
+    {
+        get
+        {
+            if (_openAsService is null && _source is not null)
+            {
+                var http = _openAsHttp = new HttpClient(new HttpClientHandler { UseCookies = false, UseProxy = false });
+                _openAsService = new OpenAsService(
+                    _source,
+                    (baseUrl, sid, ct) => OpenAsService.CheckSessionAsync(http, baseUrl, sid, SessionCheckTimeout, ct),
+                    TimeProvider.System);
+            }
+            return _openAsService;
+        }
+    }
+
+    private IReadOnlyList<OpenAsItem> OpenAsItemsFor(BenchStatus bench, string site)
+    {
+        var pins = _config.PinsFor(bench.Path, site);
+        var service = OpenAsSvc;
+        return OpenAsMenuModel.Items(
+            pins,
+            service?.PreviousUser(bench.Path, site),
+            user => service?.LabelFor(bench.Path, site, user, pins) ?? user);
+    }
+
+    /// <summary>
+    /// The line to show instead of calling the shim, or null when the distro runs. Asked of WSL now, not read from the
+    /// snapshot (up to 5 minutes old, and WSL idles a distro out): the shim would boot a stopped one.
+    /// </summary>
+    private async Task<string?> DistroProblemAsync(CancellationToken ct)
+    {
+        if (_probe is null) return _controller?.Snapshot.DistroStopped == true ? DistroGuard.StoppedMessage : null;
+        return await DistroGuard.CheckAsync(_probe, DistroName.Resolve(_config.Distro), ct);
+    }
+
+    /// <summary>
+    /// Opens the site in the browser as <paramref name="user"/>. The error line, or null. Cancelling <paramref name="ct"/>
+    /// throws and opens nothing. The user counts as "current" only once the browser launch succeeded.
+    /// </summary>
+    private async Task<string?> SwitchUserAsync(BenchStatus bench, string site, string user, CancellationToken ct)
+    {
+        if (OpenAsSvc is not { } service) return "BenchBar is not ready.";
+        if (await DistroProblemAsync(ct) is { } distroProblem) return distroProblem;
+        var (url, error) = await service.SwitchAsync(bench, site, user, null, ct);
+        if (url is null) return error ?? "The site could not be opened.";
+        ct.ThrowIfCancellationRequested();
+        // ShellExecute with the URL as one string: it holds `&`, which `cmd /c start` would split on
+        if (!OpenUrl(url.AbsoluteUri)) return BrowserFailedMessage;
+        service.MarkOpened(bench.Path, site, user);
+        // a switch from Find User leaves a warm flyout showing the previous "as {label}" until the next poll
+        if (_controller is { } controller)
+            _flyout?.View.SetSnapshot(controller.Snapshot, TrayController.UpText(controller.Snapshot, controller.Benches.Select(b => b.State).ToList()));
+        return null;
+    }
+
+    private async Task<(UserList? Users, string? Error)> FindUsersAsync(
+        BenchStatus bench, string site, string? text, CancellationToken ct, int limit = OpenAsService.UserListLimit)
+    {
+        if (OpenAsSvc is not { } service) return (null, "BenchBar is not ready.");
+        if (await DistroProblemAsync(ct) is { } distroProblem) return (null, distroProblem);
+        return await service.FindUsersAsync(bench, site, text, ct, limit);
+    }
+
+    private void ShowFindUser(BenchStatus bench, string site)
+    {
+        var key = TrayConfig.PinKey(bench.Path, site);
+        if (_findUsers.TryGetValue(key, out var existing))
+        {
+            existing.Activate();
+            return;
+        }
+        var actions = new FindUserActions
+        {
+            Find = (text, ct) => FindUsersAsync(bench, site, text, ct),
+            Open = user => SwitchUserAsync(bench, site, user, CancellationToken.None),
+            Pins = () => _config.PinsFor(bench.Path, site),
+            Pin = (user, label) =>
+                !_config.TryPin(bench.Path, site, user, label) ? PinOutcome.NoRoom
+                : SaveConfig() ? PinOutcome.Saved
+                : PinOutcome.NotSaved,
+            Unpin = user =>
+            {
+                _config.Unpin(bench.Path, site, user);
+                return SaveConfig();
+            },
+        };
+        var window = new FindUserWindow(site, actions, Theme);
+        _findUsers[key] = window;
+        window.Closed += (_, _) =>
+        {
+            _findUsers.Remove(key);
+            Awake(false);
+        };
+        Awake(true);
+        window.Show();
+    }
+
+    // --- Quick Switch ---
+
+    /// <summary>
+    /// Registers Ctrl+Alt+U when the setting is on and drops it when off. A key another app owns leaves the feature inactive
+    /// with a note in the menu (the item stays checked); one click turns the setting off, the next turning it on tries again.
+    /// </summary>
+    private void ApplyQuickSwitch()
+    {
+        if (_quitting) return;
+        if (!_config.QuickSwitch)
+        {
+            _hotKey?.Dispose();
+            _hotKey = null;
+            _quickSwitchTaken = false;
+            _quickSwitch?.Close();
+            return;
+        }
+        if (_hotKey is { IsRegistered: true }) return;
+        _hotKey?.Dispose();
+        var key = new HotKey(() => Dispatcher.BeginInvoke(ShowQuickSwitch));
+        try
+        {
+            _quickSwitchTaken = !key.TryRegister();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            _log.Write("quick-switch", ex);
+            _quickSwitchTaken = true;
+        }
+        if (_quickSwitchTaken)
+        {
+            key.Dispose();
+            _hotKey = null;
+            return;
+        }
+        _hotKey = key;
+    }
+
+    private void ShowQuickSwitch()
+    {
+        if (_quitting || _controller is null) return;
+        if (_quickSwitch is not null)
+        {
+            _quickSwitch.Close();
+            return;
+        }
+        var target = QuickSwitchModel.Choose(_controller.Snapshot, _lastQuickSwitch);
+        var service = OpenAsSvc;
+        var data = QuickSwitchData.Empty;
+        QuickSwitchActions actions = new();
+        if (target.Bench is { } bench && service is not null)
+        {
+            data = new QuickSwitchData(
+                site => _config.PinsFor(bench.Path, site),
+                site => service.CurrentUser(bench.Path, site),
+                site => service.PreviousUser(bench.Path, site),
+                (site, user) => service.LabelFor(bench.Path, site, user, _config.PinsFor(bench.Path, site)),
+                (site, user) => service.FullNameOf(bench.Path, site, user));
+            actions = new QuickSwitchActions
+            {
+                Find = (site, text, ct) => FindUsersAsync(bench, site, text, ct, QuickSwitchModel.SearchLimit),
+                Switch = async (site, user, ct) =>
+                {
+                    var error = await SwitchUserAsync(bench, site, user, ct);
+                    if (error is null) _lastQuickSwitch = (bench.Path, site);
+                    return error;
+                },
+                ReportFailure = message => ShowToast(new Toast("Open as failed", message, bench.Path, AlertKind.None)),
+            };
+        }
+        else if (target.State == QuickSwitchState.Ready)
+        {
+            target = new QuickSwitchTarget(QuickSwitchState.BenchStopped, null, [], null);
+        }
+
+        var window = new QuickSwitchWindow(target, data, actions, Theme);
+        _quickSwitch = window;
+        window.Closed += (_, _) =>
+        {
+            _quickSwitch = null;
+            Awake(false);
+        };
+        Awake(true);
+        window.ShowCentered();
+    }
 
     private VsCodeOutcome OpenVsCode(BenchStatus bench)
     {
@@ -364,6 +565,14 @@ public partial class App : Application, ITrayHost
             SaveConfig();
             if (_controller is not null) _controller.Notifications = on;
         },
+        QuickSwitch = () => _config.QuickSwitch,
+        QuickSwitchTaken = () => _quickSwitchTaken,
+        SetQuickSwitch = on =>
+        {
+            _config.QuickSwitch = on;
+            SaveConfig();
+            ApplyQuickSwitch();
+        },
         Theme = () => Theme,
         CheckForUpdates = () => _ = CheckForUpdatesAsync(),
         Help = () => OpenUrl(HelpUrl),
@@ -379,12 +588,17 @@ public partial class App : Application, ITrayHost
             _ => ThemeMode.System,
         };
 
-    private void SaveConfig()
+    private bool SaveConfig()
     {
-        try { _config.Save(); }
+        try
+        {
+            _config.Save();
+            return true;
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _log.Write("config", ex);
+            return false;
         }
     }
 
@@ -463,10 +677,18 @@ public partial class App : Application, ITrayHost
         catch (System.Runtime.InteropServices.COMException ex) { _log.Write("clipboard", ex); }
     }
 
-    private static void OpenUrl(string url)
+    /// <summary>False when Windows could not launch the URL (no default browser).</summary>
+    private static bool OpenUrl(string url)
     {
-        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose(); }
-        catch (System.ComponentModel.Win32Exception) { }
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
     }
 
     private void Quit()
@@ -474,9 +696,14 @@ public partial class App : Application, ITrayHost
         if (_quitting) return;
         _quitting = true;
         _controller?.Dispose();
+        _hotKey?.Dispose(); // UnregisterHotKey
+        _hotKey = null;
+        _quickSwitch?.Close();
         _flyout?.Close();
         foreach (var w in _logs.Values.ToList()) w.Close();
         foreach (var w in _doctors.Values.ToList()) w.Close();
+        foreach (var w in _findUsers.Values.ToList()) w.Close();
+        _openAsHttp?.Dispose();
         _icon?.Dispose(); // NIM_DELETE
         _link?.Dispose(); // sends bye
         Shutdown();

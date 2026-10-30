@@ -20,7 +20,7 @@ public class TrayMenuTests : IDisposable
         var menu = new TrayMenu(new TrayMenuModel());
         Assert.Equal(
             [
-                "Open BenchBar at logon", "Appearance", "Runner", "Notifications", "-",
+                "Open BenchBar at logon", "Appearance", "Runner", "Notifications", "Quick Switch: Ctrl+Alt+U", "-",
                 "Check for Updates", "Help", "Report a Bug", "-", "Quit",
             ],
             menu.Headers);
@@ -45,6 +45,34 @@ public class TrayMenuTests : IDisposable
         var appearance = items[1].Items.OfType<MenuItem>().ToList();
         Assert.Equal(["System", "Light", "Dark"], appearance.Select(i => i.Header));
         Assert.Equal([false, false, true], appearance.Select(i => i.IsChecked));
+    });
+
+    [Fact]
+    public void QuickSwitchShowsItsStateAndNamesTheOtherAppWhenTheKeyIsTaken() => Sta.Run(() =>
+    {
+        var seen = new List<bool>();
+        var taken = false;
+        var model = new TrayMenuModel
+        {
+            QuickSwitch = () => true,
+            QuickSwitchTaken = () => taken,
+            SetQuickSwitch = seen.Add,
+        };
+        var menu = new TrayMenu(model);
+        var item = menu.Menu.Items.OfType<MenuItem>().Single(i => i.Header is string h && h.StartsWith("Quick Switch", StringComparison.Ordinal));
+
+        menu.RefreshChecks();
+        Assert.True(item.IsChecked);
+        Assert.Equal("Quick Switch: Ctrl+Alt+U", item.Header);
+
+        taken = true;
+        menu.RefreshChecks();
+        Assert.True(item.IsChecked); // the setting is on, so one click turns it off
+        Assert.Equal("Quick Switch: Ctrl+Alt+U is used by another app", item.Header);
+
+        item.IsChecked = false; // what a click on a checked item does first
+        item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        Assert.Equal([false], seen);
     });
 
     [Fact]

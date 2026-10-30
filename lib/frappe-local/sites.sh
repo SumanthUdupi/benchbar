@@ -57,7 +57,7 @@ fl_hosts_has_name() {
   return 1
 }
 
-# fl_sites_json_v VAR [PINGS] [DB]: [{"name":..,"default":..,"hosts_entry":..,"ping_code":..}]
+# fl_sites_json_v VAR [PINGS] [DB]: [{"name":..,"default":..,"hosts_entry":..,"ping_code":..,"developer_mode":..,"open_as":..}]
 #   none  ping_code null (list; status without --ping), no lsof, no curl
 #   ask   one curl per site; the default site reuses FL_DEFAULT_PING when set (status --ping)
 #   ping  one curl per site when something listens on the web port (site list)
@@ -71,9 +71,10 @@ fl_hosts_has_name() {
 # runs and its default site answered, one second each within a shared 2 second budget.
 FL_DEFAULT_PING=""
 fl_sites_json_v() {
-  local __mode="${2:-none}" __db="${3:-0}" __served="${4:-0}" __out="[" __sep="" __s __ping __listening=1 __jn __jd __jh __jp __def __hosts __dbn __dbp __dbj __bench_port __code __sv __sj __end __c
+  local __mode="${2:-none}" __db="${3:-0}" __served="${4:-0}" __out="[" __sep="" __s __ping __listening=1 __jn __jd __jh __jp __jdm __joa __served_site __def __hosts __dbn __dbp __dbj __bench_port __code __sv __sj __end __c
   if [[ "$__mode" == "ping" && -z "$(fl_port_listener_pid "$FL_WEB_PORT")" ]]; then __listening=0; fi
   if [[ "$__db" == "1" ]]; then fl_site_config_value_v __bench_port db_port; fi
+  fl_site_config_value_v __served_site default_site
   __end=$((SECONDS + 2))
   while IFS= read -r __s; do
     [[ -n "$__s" ]] || continue
@@ -101,6 +102,9 @@ fl_sites_json_v() {
     __def=0; [[ "$__s" == "$FL_SITE" ]] && __def=1
     __hosts=0; fl_hosts_has_name "$__s" && __hosts=1
     fl_json_str_v __jn "$__s"; fl_json_bool_v __jd "$__def"; fl_json_bool_v __jh "$__hosts"; fl_json_num_v __jp "$__ping"
+    __jdm=false; fl_site_developer_mode "$__s" && __jdm=true
+    # open --as signs in only on the site bench serve answers as (fl_open_as_require_served)
+    __joa=false; [[ "$__jdm" == true && ( -z "$__served_site" || "$__s" == "$__served_site" ) ]] && __joa=true
     __dbj=""
     if [[ "$__db" == "1" ]]; then
       fl_site_file_value_v __dbn "${FL_BENCH_DIR}/sites/${__s}/site_config.json" db_name
@@ -110,7 +114,7 @@ fl_sites_json_v() {
       fl_json_str_v __dbn "$__dbn"
       __dbj=",\"db_name\":${__dbn},\"db_port\":${__dbp}"
     fi
-    __out="${__out}${__sep}{\"name\":${__jn},\"default\":${__jd},\"hosts_entry\":${__jh},\"ping_code\":${__jp}${__sj}${__dbj}}"
+    __out="${__out}${__sep}{\"name\":${__jn},\"default\":${__jd},\"hosts_entry\":${__jh},\"ping_code\":${__jp},\"developer_mode\":${__jdm},\"open_as\":${__joa}${__sj}${__dbj}}"
     __sep=","
   done < <(fl_sites_list)
   printf -v "$1" '%s]' "$__out"
@@ -142,6 +146,16 @@ fl_site_file_value_v() {
     done <"$2"
   fi
   printf -v "$1" '%s' "$__v"
+}
+
+# fl_site_developer_mode SITE: whether frappe sees developer_mode on for SITE.
+# Its site_config.json wins over common_site_config.json, as frappe merges
+# them; 1 or true is on. Two reads in bash: status polls this for every site.
+fl_site_developer_mode() {
+  local v
+  fl_site_file_value_v v "${FL_BENCH_DIR}/sites/$1/site_config.json" developer_mode
+  [[ -n "$v" ]] || fl_site_config_value_v v developer_mode
+  [[ "$v" == "1" || "$v" == "true" ]]
 }
 
 # fl_sites_json [PINGS]: the same, printed, with the database name and port; site list asks every site

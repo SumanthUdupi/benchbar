@@ -6,9 +6,12 @@ namespace BenchBar.Tray.Core;
 /// <summary>The Appearance setting: follow Windows, or force light or dark.</summary>
 public enum AppearanceMode { System, Light, Dark }
 
+/// <summary>A user pinned in the "Open as…" menu; <see cref="Label"/> is the owner's own name for it ("NE"), or null.</summary>
+public sealed record PinnedUser(string User, string? Label);
+
 /// <summary>
 /// <c>%LOCALAPPDATA%\BenchBar\config.json</c>, shared with the shim. The shim owns <c>distro</c> and <c>cli_path</c>;
-/// the tray owns a <c>tray</c> object (<c>appearance</c>, <c>runner</c>, <c>notifications</c>). Save re-reads the file
+/// the tray owns a <c>tray</c> object (<c>appearance</c>, <c>runner</c>, <c>notifications</c>, <c>quick_switch</c>, <c>open_as_pins</c>). Save re-reads the file
 /// from disk and replaces only the <c>tray</c> object, so whatever the shim wrote since the tray started
 /// (<c>adopt-distro</c> sets <c>distro</c>) is never reverted; the write is atomic. <see cref="Distro"/> is read from
 /// the file again whenever its write time changes. Read with <see cref="JsonNode"/>, so no reflection serializer is needed.
@@ -16,6 +19,9 @@ public enum AppearanceMode { System, Light, Dark }
 public sealed class TrayConfig
 {
     public const string DefaultRunnerId = "bench";
+
+    /// <summary>The most users one site can pin.</summary>
+    public const int MaxPinsPerSite = 9;
 
     private bool _corrupt;
     private bool _unreadable;
@@ -64,6 +70,46 @@ public sealed class TrayConfig
 
     public bool Notifications { get; set; } = true;
 
+    /// <summary>The Ctrl+Alt+U Quick Switch hotkey. On when the key is absent.</summary>
+    public bool QuickSwitch { get; set; } = true;
+
+    /// <summary>Pinned users by <see cref="PinKey"/>. Only the owner's labels and user ids: never a session.</summary>
+    public Dictionary<string, List<PinnedUser>> OpenAsPins { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>The key of a site's pins: <c>"&lt;benchPath&gt;|&lt;site&gt;"</c>.</summary>
+    public static string PinKey(string benchPath, string site) => benchPath + "|" + site;
+
+    /// <summary>Frappe user ids are case-insensitive: "Ne@x.com" is the pinned "ne@x.com".</summary>
+    public static bool SameUser(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    public IReadOnlyList<PinnedUser> PinsFor(string benchPath, string site) =>
+        OpenAsPins.TryGetValue(PinKey(benchPath, site), out var pins) ? pins : [];
+
+    /// <summary>Pins <paramref name="user"/> (or relabels it when pinned). False when the site already has <see cref="MaxPinsPerSite"/> other pins.</summary>
+    public bool TryPin(string benchPath, string site, string user, string? label)
+    {
+        var key = PinKey(benchPath, site);
+        if (!OpenAsPins.TryGetValue(key, out var pins)) OpenAsPins[key] = pins = [];
+        var cleanLabel = string.IsNullOrWhiteSpace(label) ? null : label.Trim();
+        var at = pins.FindIndex(p => SameUser(p.User, user));
+        if (at >= 0)
+        {
+            pins[at] = new PinnedUser(user, cleanLabel);
+            return true;
+        }
+        if (pins.Count >= MaxPinsPerSite) return false;
+        pins.Add(new PinnedUser(user, cleanLabel));
+        return true;
+    }
+
+    public void Unpin(string benchPath, string site, string user)
+    {
+        var key = PinKey(benchPath, site);
+        if (!OpenAsPins.TryGetValue(key, out var pins)) return;
+        pins.RemoveAll(p => SameUser(p.User, user));
+        if (pins.Count == 0) OpenAsPins.Remove(key);
+    }
+
     /// <summary>True when the file existed but was not valid JSON; Save then keeps it as <c>config.json.bad</c> first.</summary>
     public bool WasCorrupt => _corrupt;
 
@@ -99,6 +145,8 @@ public sealed class TrayConfig
             config.Appearance = ParseAppearance(ReadString(tray, "appearance"));
             config.RunnerId = ReadString(tray, "runner") is { Length: > 0 } id ? id : DefaultRunnerId;
             if (tray["notifications"] is JsonValue v && v.TryGetValue<bool>(out var on)) config.Notifications = on;
+            if (tray["quick_switch"] is JsonValue q && q.TryGetValue<bool>(out var quick)) config.QuickSwitch = quick;
+            if (tray["open_as_pins"] is JsonObject pins) config.ReadPins(pins);
         }
         return config;
     }
@@ -158,6 +206,9 @@ public sealed class TrayConfig
         tray["appearance"] = AppearanceText(Appearance);
         tray["runner"] = RunnerId;
         tray["notifications"] = Notifications;
+        tray["quick_switch"] = QuickSwitch;
+        if (OpenAsPins.Count > 0) tray["open_as_pins"] = PinsToJson();
+        else tray.Remove("open_as_pins");
         root["tray"] = tray;
 
         var temp = Path + "." + Environment.ProcessId + ".tmp";
@@ -173,6 +224,35 @@ public sealed class TrayConfig
             if (File.Exists(temp)) File.Delete(temp);
         }
         _corrupt = false;
+    }
+
+    private void ReadPins(JsonObject pins)
+    {
+        foreach (var (key, node) in pins)
+        {
+            if (node is not JsonArray array) continue;
+            var list = new List<PinnedUser>();
+            foreach (var item in array)
+            {
+                if (item is not JsonObject entry || ReadString(entry, "user") is not { Length: > 0 } user) continue;
+                if (list.Count >= MaxPinsPerSite || list.Any(p => SameUser(p.User, user))) continue;
+                list.Add(new PinnedUser(user, ReadString(entry, "label") is { Length: > 0 } label ? label : null));
+            }
+            if (list.Count > 0) OpenAsPins[key] = list;
+        }
+    }
+
+    private JsonObject PinsToJson()
+    {
+        var all = new JsonObject();
+        foreach (var (key, pins) in OpenAsPins)
+        {
+            var array = new JsonArray();
+            foreach (var pin in pins.Take(MaxPinsPerSite))
+                array.Add(new JsonObject { ["user"] = pin.User, ["label"] = pin.Label });
+            all[key] = array;
+        }
+        return all;
     }
 
     /// <summary>The root object, or null when the text is not a JSON object. A duplicate key is invalid JSON here too.</summary>

@@ -72,6 +72,8 @@ targets:
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: "BenchBar. Built for Frappe and ERPNext on macOS. MIT License."
         BenchBarTagline: "Built for Frappe and ERPNext on macOS"
+        # asked once per browser, and only when "Keep the page I'm on" is switched on
+        NSAppleEventsUsageDescription: "BenchBar reads and changes the address of your browser's current tab only when you switch user with “Keep the page I'm on” turned on."
         # benchbar:// links (Raycast, Shortcuts); App/URLRouter.swift lists the routes
         CFBundleURLTypes:
           - CFBundleURLName: com.akashmishra.benchbar
@@ -81,6 +83,8 @@ targets:
       properties:
         # Not sandboxed: a sandboxed app cannot run the benchbar CLI.
         com.apple.security.app-sandbox: false
+        # a hardened runtime app is refused Apple Events (no prompt at all) without this
+        com.apple.security.automation.apple-events: true
     settings:
       base:
         PRODUCT_NAME: BenchBar

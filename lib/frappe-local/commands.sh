@@ -84,6 +84,16 @@ flag~uninstall-service~--yes~~Do not ask; required without a terminal.
 cmd~path~benchbar path~Print the bench directory.~no~no~no~no~none
 cmd~console~benchbar console [--site S]~bench --site SITE console: a Python shell with frappe.~yes~no~no~no~none
 cmd~db~benchbar db [--site S]~bench --site SITE mariadb: the site's database.~yes~no~no~no~none
+cmd~open~benchbar open [--site S] [--as USER] [--path P] [--no-browser] [--print-url] [--json]~Open a site in the browser, or open it signed in as USER (developer_mode sites only).~no~no~no~no~document
+flag~open~--as~USER~Sign in as this user, no password. Refused unless the site has developer_mode on.
+flag~open~--path~P~Where to land, for example /app/todo. Default: /app, or / for a Website User.
+flag~open~--no-browser~~Start the session, open nothing.
+flag~open~--print-url~~Print the link (it holds the session id) instead of opening it; in --json as url.
+flag~open~--json~~One JSON document; url only with --print-url.
+cmd~users~benchbar users [--site S] [--search Q] [--limit N] [--json]~Enabled users of a site, for open --as.~no~no~no~no~document
+flag~users~--search~TEXT~Only users whose id or full name contains TEXT.
+flag~users~--limit~N~At most N users (1 to 500, default 50).
+flag~users~--json~~One JSON document.
 cmd~pull~benchbar pull HOST:SITE [--as NAME] [--from-dir DIR] [--replace] [--json]~Copy a production site over SSH into a new local site.~yes~no~yes~yes~stream
 flag~pull~--as~NAME~Local site name (default SITE.local).
 flag~pull~--from-dir~DIR~A backup set downloaded by hand, no SSH.

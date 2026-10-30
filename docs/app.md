@@ -48,6 +48,104 @@ top chooses which bench the popover shows.
 | ⌘F | Open the bench folder |
 | ⌘K | Health in the BenchBar window |
 | ⌘M | The BenchBar window |
+| ⌘0, ⌘1 to ⌘9 | Open the default site as Administrator, or as a pinned user ([Open as a user](#open-as-a-user)) |
+| ⇧⌘O | Switch back to the previous user |
+| ⌃⌥U | Quick Switch: the pinned-user panel, from any app ([Quick Switch](#quick-switch)) |
+
+## Open as a user
+
+On a bench's **default site** with `developer_mode` on (its `site_config.json`, else
+`common_site_config.json`), while the bench runs, there is an **Open as…** control
+(a person icon and the words) in the popover's site row, on the window's Sites tab and
+beside **Open Site** on the Overview tab. It opens the site in your browser signed in as
+another user, with no password. Under the hood it runs
+[`benchbar open --as`](reference/cli/other.md#open).
+
+Only the default site is offered, because the bench serves only that one: BenchBar starts
+`bench serve` for the default site, so port 8000 answers every address with it. A session
+made in another site's database would land the browser logged out. Other sites show no
+control (the Sites tab explains why when you hover the site's name). When the default site
+cannot use it, the control stays visible but dimmed, and its tooltip says why: developer_mode
+is off for the site, the bench is stopped (start it first), or the benchbar CLI is too old to
+report developer_mode. A site whose name has no hosts line shows **Set Up…** instead.
+
+The menu lists:
+
+- **Switch Back to {name}**: the user before this one (⇧⌘O). Switching is a toggle.
+- Your pinned users, as `{label} — {user}` (⌘1 to ⌘9), then **Administrator** (⌘0).
+- **Find User…**: a sheet in the BenchBar window that searches the site's enabled
+  users as you type. **Open** signs in as that user; the pin keeps them in the menu,
+  with a label of your own (for example `NE`). A site keeps nine pins.
+- **Keep the page I'm on**: see below.
+
+With nobody pinned the menu says how: "Pin people from Find User… to switch to them
+here". The shortcuts work in the popover, for the default site. After a switch the
+site's row reads `as {name}`: the pin's label, else the user's full name, else
+the user id. That is BenchBar's own record of its last switch, not what the browser shows
+now: it is stale after you log out by hand or relaunch BenchBar, and the last site is
+remembered only until you quit.
+
+The link opens in the browser you used last (Safari, Chrome, Arc, Brave, Edge or
+Firefox), so the session cookie lands where you are testing. Without
+**Keep the page I'm on** it opens a new tab: other tabs of that site keep the old
+user's screen, so reload them. With it on, BenchBar sends the browser's current
+tab for that site to the new user, on the same page. That needs macOS's
+Automation permission, which macOS asks for once per browser when you first use
+it; it is off by default, and Firefox always gets a new tab. If macOS has refused that
+permission, BenchBar says so once per run, in the popover and on the Sites tab ("System
+Settings → Privacy & Security → Automation"), and the switch opens a new tab. After a
+successful in-place switch the browser is brought to the front.
+
+The browser is the supported one you used last; if none was frontmost since BenchBar
+started, the first supported browser that is running, and only then your default browser.
+
+A login belongs to the address in the browser's address bar, so switching
+happens on the site's own name (`http://macdev:8000`). If you work on the
+default site at `http://127.0.0.1:8000` or `http://localhost:8000`, turn on
+**Keep the page I'm on**: a tab there is then switched in place, at that
+address. Without it, BenchBar cannot see which address your tab uses and opens
+the site's own name.
+
+BenchBar keeps the sessions it created in memory, and reuses one while the site
+still says it belongs to that user, so switching back is quick. Quitting BenchBar
+forgets them. Nothing about a session is written to disk or logged by BenchBar; the
+browser keeps the sign-in link in its history. The side
+effects on the site (last login, `on_login` hooks, older sessions of that user
+signed out, restrictions that still apply) are the ones
+[`benchbar open`](reference/cli/other.md#open) lists.
+
+## Quick Switch
+
+⌃⌥U opens a small floating list in the middle of the screen, from any app, so you can
+change user without leaving the browser or reaching for the mouse. BenchBar does not
+come to the front: the browser stays the frontmost app, so the browser BenchBar opens in
+and **Keep the page I'm on** work as they do from the menu.
+
+The panel is titled `Open {site} as…`. The site is the one you last switched on, else the
+selected bench's default site; only default sites that have the Open as menu are offered, so
+⇥ moves between benches' default sites. The rows are **Switch Back to {name}**, your pins and
+**Administrator**; the user BenchBar last opened has a ✓ and "last opened". The first row is
+selected, so **⌃⌥U then ↩ toggles between the last two users**.
+
+| Key | Action |
+|---|---|
+| ↑ ↓ | Move the selection, wrapping around |
+| ↩ | Switch. A spinner shows on the row, the panel closes as soon as the switch has been handed to the browser, and a failure shows inline with the field ready for another try. A second switch on a site already switching says "Already switching…" |
+| esc | Close |
+| 0 to 9 | Switch at once while the field is empty: 0 is Administrator, 1 to 9 the pins in order. A digit with no row is typed into the field. The footer shows "0–9 quick pick" only while this applies |
+| ⇥ | Next site |
+| Typing | Filters the rows by label, user id or full name |
+
+With two or more characters typed, the panel also searches the site's users (limit 8, after a
+short pause) and lists them under **Other users**, with "Searching…" while it asks. Nothing
+matching shows `No users match`. Clicking anywhere else closes the panel. When there is nothing
+to switch on it says why, in its own words: "Loading benches…", no bench, "Update the benchbar
+CLI to use Open as", "Turn on developer_mode for {site}", or "Start {bench} first". The panel
+asks the bench for fresh status when it opens, so a bench started from Terminal is picked up.
+
+Settings has **Quick Switch: ⌃⌥U**, on by default. It registers the key with macOS directly and
+needs no Accessibility permission. If another app already has ⌃⌥U, Settings says
+"⌃⌥U is used by another app" and Quick Switch stays off; turning the setting off and on again tries once more.
 
 ## Links for Raycast and Shortcuts
 

@@ -25,6 +25,19 @@ internal sealed class FlyoutActions
     public Action StartDistro { get; set; } = () => { };
     public Action<string> CopyText { get; set; } = _ => { };
     public Action<string> OpenUrl { get; set; } = _ => { };
+
+    /// <summary>The "Open as…" lines of one site: Switch Back, the pins, Administrator, Find User….</summary>
+    public Func<BenchStatus, string, IReadOnlyList<OpenAsItem>> OpenAsItems { get; set; } =
+        (_, _) => OpenAsMenuModel.Items([], null, user => user);
+
+    /// <summary>The label of the user a site was last opened as ("as {label}" under the site name), or null.</summary>
+    public Func<BenchStatus, string, string?> OpenAsLabel { get; set; } = (_, _) => null;
+
+    /// <summary>Opens a site as a user (bench, site, user id). The error line, or null when it opened.</summary>
+    public Func<BenchStatus, string, string, Task<string?>> OpenAs { get; set; } = (_, _, _) => Task.FromResult<string?>(null);
+
+    /// <summary>Shows the Find User window of a site.</summary>
+    public Action<BenchStatus, string> FindUser { get; set; } = (_, _) => { };
 }
 
 /// <summary>What the flyout shows now.</summary>
@@ -64,6 +77,7 @@ internal sealed class FlyoutView : UserControl
     private readonly StackPanel _body = new();
     private readonly StackPanel _message = new() { Visibility = Visibility.Collapsed, Margin = new Thickness(16, 0, 16, 8) };
     private readonly HashSet<string> _busy = [];
+    private readonly HashSet<string> _switching = [];
     private readonly Dictionary<string, (string Message, BenchState State, string? Reason)> _failures = [];
     private readonly List<BenchRow> _rows = [];
     private TraySnapshot _snapshot = TraySnapshot.Empty;
@@ -161,7 +175,11 @@ internal sealed class FlyoutView : UserControl
         s.DistroStopped ? $"stopped|{s.Distro}|{_distroStarting}" : "up",
         s.Problem ?? "",
         string.Join('\n', s.Benches.Select(b =>
-            $"{b.Path}|{b.Name}|{b.State}|{b.RawState}|{b.StopReason}|{b.Site}|{b.WebUrl}|{_busy.Contains(b.Path)}|{(_failures.TryGetValue(b.Path, out var f) ? f.Message : "")}|{b.Problem}")));
+            $"{b.Path}|{b.Name}|{b.State}|{b.RawState}|{b.StopReason}|{b.Site}|{b.WebUrl}|{_busy.Contains(b.Path)}|{OpenAsKey(b)}|{(_failures.TryGetValue(b.Path, out var f) ? f.Message : "")}|{b.Problem}")));
+
+    /// <summary>What the row shows of "Open as…": which sites it works on, who each was opened as, and a switch under way.</summary>
+    private string OpenAsKey(BenchStatus bench) => _switching.Contains(bench.Path) + ":" + string.Join(',',
+        bench.Sites.Select(s => $"{s.Name}={s.CanOpenAs}={(s.CanOpenAs ? _actions.OpenAsLabel(bench, s.Name) : "")}"));
 
     private void Rebuild()
     {
@@ -273,13 +291,15 @@ internal sealed class FlyoutView : UserControl
 
         var names = new StackPanel { Margin = new Thickness(10, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
         names.Children.Add(new TextBlock { Text = row.NameText, TextTrimming = TextTrimming.CharacterEllipsis });
-        names.Children.Add(new TextBlock { Text = row.SiteText, FontSize = 11, Opacity = 0.65, TextTrimming = TextTrimming.CharacterEllipsis });
+        var running = bench.State is BenchState.Running or BenchState.Starting;
+        var devSites = bench.OpenAsSites;
+        var asLabel = bench.State == BenchState.Running && devSites.Any(s => s.Name == row.SiteText) ? _actions.OpenAsLabel(bench, row.SiteText) : null;
+        names.Children.Add(new TextBlock { Text = asLabel is null ? row.SiteText : $"{row.SiteText} · as {asLabel}", FontSize = 11, Opacity = 0.65, TextTrimming = TextTrimming.CharacterEllipsis });
         Grid.SetColumn(names, 1);
 
         var word = new TextBlock { Text = row.StateText, Opacity = 0.7, Margin = new Thickness(0, 0, 10, 0), VerticalAlignment = VerticalAlignment.Center };
         Grid.SetColumn(word, 2);
 
-        var running = bench.State is BenchState.Running or BenchState.Starting;
         var action = new Button
         {
             Content = running ? "Stop" : "Start",
@@ -303,6 +323,13 @@ internal sealed class FlyoutView : UserControl
 
         var strip = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(18, 2, 0, 0) };
         var site = TextButton("Open site", () => _actions.OpenSite(bench), enabled: !string.IsNullOrWhiteSpace(bench.WebUrl));
+        var canOpenAs = bench.State == BenchState.Running && devSites.Count > 0 && !_snapshot.DistroStopped && !_switching.Contains(bench.Path);
+        var openAs = TextButton(OpenAsMenuModel.Title, () => { }, enabled: canOpenAs);
+        openAs.ToolTip = bench.State != BenchState.Running ? "Start the bench to open a site as another user"
+            : devSites.Count > 0 ? "Open a site signed in as another user"
+            : bench.Sites.Any(s => s.DeveloperMode) ? "Open as works on the default site only, and the default site is not in developer mode"
+            : "No site of this bench is in developer mode";
+        openAs.Click += (_, _) => OpenOpenAsMenu(openAs, bench, devSites);
         var logs = TextButton("Logs", () => _actions.ShowLogs(bench));
         var code = TextButton("VS Code", () => {
             switch (_actions.OpenVsCode(bench))
@@ -313,9 +340,9 @@ internal sealed class FlyoutView : UserControl
         });
         code.ToolTip = _actions.VsCodeAvailable() ? "Open the bench in VS Code" : VsCode.InstallMessage;
         var doctor = TextButton("Doctor", () => _actions.ShowDoctor(bench));
-        foreach (var b in new[] { site, logs, code, doctor }) strip.Children.Add(b);
+        foreach (var b in new[] { site, openAs, logs, code, doctor }) strip.Children.Add(b);
 
-        row.Buttons.AddRange([action, more, site, logs, code, doctor]);
+        row.Buttons.AddRange([action, more, site, openAs, logs, code, doctor]);
 
         var stack = new StackPanel();
         stack.Children.Add(grid);
@@ -369,6 +396,65 @@ internal sealed class FlyoutView : UserControl
         menu.Items.Add(copy);
         menu.IsOpen = true;
     }
+
+    /// <summary>The "Open as…" menu: the items directly for one developer-mode site, a submenu per site for several.</summary>
+    internal ContextMenu BuildOpenAsMenu(BenchStatus bench, IReadOnlyList<SiteInfo> devSites)
+    {
+        var menu = new ContextMenu();
+        if (devSites.Count == 1)
+        {
+            AddOpenAsItems(menu.Items, bench, devSites[0].Name);
+            return menu;
+        }
+        foreach (var site in devSites)
+        {
+            var submenu = new MenuItem { Header = MenuText(site.Name) };
+            AddOpenAsItems(submenu.Items, bench, site.Name);
+            menu.Items.Add(submenu);
+        }
+        return menu;
+    }
+
+    private void OpenOpenAsMenu(Button anchor, BenchStatus bench, IReadOnlyList<SiteInfo> devSites)
+    {
+        var menu = BuildOpenAsMenu(bench, devSites);
+        menu.PlacementTarget = anchor;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+        menu.IsOpen = true;
+    }
+
+    private void AddOpenAsItems(ItemCollection items, BenchStatus bench, string site)
+    {
+        foreach (var item in _actions.OpenAsItems(bench, site))
+        {
+            if (item.Kind == OpenAsItemKind.Separator)
+            {
+                items.Add(new Separator());
+                continue;
+            }
+            var entry = new MenuItem { Header = MenuText(item.Header) };
+            if (item.User is { } user) entry.Click += async (_, _) => await OpenAsAsync(bench, site, user);
+            else entry.Click += (_, _) => _actions.FindUser(bench, site);
+            items.Add(entry);
+        }
+    }
+
+    private async Task OpenAsAsync(BenchStatus bench, string site, string user)
+    {
+        _switching.Add(bench.Path);
+        _failures.Remove(bench.Path);
+        Refresh();
+        string? error;
+        try { error = await _actions.OpenAs(bench, site, user); }
+        catch (Exception ex) { error = ex.Message; }
+        _switching.Remove(bench.Path);
+        // the line stays under the row until the bench changes state, like a failed Start or Stop
+        if (error is not null) _failures[bench.Path] = (error, bench.State, bench.StopReason);
+        Refresh();
+    }
+
+    /// <summary>A menu header is access-key text: a user id such as <c>a_b@x.com</c> would lose its underscore.</summary>
+    private static string MenuText(string text) => text.Replace("_", "__");
 
     // --- keyboard ---
 

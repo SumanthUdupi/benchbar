@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Added
+
+- `benchbar open --as USER` opens a site signed in as any of its users,
+  with no password, to check what a role sees and which workflow actions
+  it gets. Only on a site with `developer_mode` on, Administrator
+  included. `--path` lands on a page, `--print-url` prints the link
+  instead. `benchbar open` alone opens the site, like the app's ⌘O.
+- `benchbar users` lists the enabled users of a site with their roles,
+  for picking one to open as (`--search`, `--limit`, `--json`).
+- `site list --json` and `status --json` give each site's
+  `developer_mode`.
+- The app: an **Open as…** menu on each site in the popover and the
+  Sites tab. Switch Back (⇧⌘O), up to nine pinned users with your own
+  labels (⌘1–⌘9), Administrator (⌘0) and Find User…. Switching back to
+  a user you used before is instant. **Keep the page I'm on** (Settings,
+  off by default) keeps the browser on the same document as the new user.
+- The Windows tray: the same **Open as…** menu beside Open site, with a
+  Find User window; pinned users are kept in `config.json`.
+- **Quick Switch** (⌃⌥U on macOS, Ctrl+Alt+U on Windows): a small list
+  of Switch Back, your pinned users and Administrator opens over any app.
+  ↑ ↓ choose, ↩ switches, Esc closes, typing searches the site's users and
+  ⇥ moves to the next bench, all without the mouse. ⌃⌥U then ↩ toggles
+  between the last two users. On by default; Settings (macOS) or the tray
+  menu (Windows) turns it off and says when another app holds the key.
+
 ## 0.8.0 - 2026-10-30
 
 ### Agents and recovery

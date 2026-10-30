@@ -29,6 +29,10 @@ running, the link starts it first.
 | `benchbar://db` | Terminal with `benchbar db` for the site |
 | `benchbar://editor` | the bench folder in VS Code or Cursor (the one chosen in Settings) |
 
+There is no route for **Open as…** (signing in as another user): any web page can open a
+`benchbar://` link, and a page you visit must not be able to change who you are signed in as.
+Raycast and Shortcuts can run `benchbar open --as USER` instead.
+
 Start and restart check ports first, as the buttons do: a conflict is
 not resolved from a link, it shows in the popover.
 

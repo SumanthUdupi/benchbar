@@ -21,6 +21,10 @@ internal sealed class TrayMenuModel
     public Action OpenRunnersFolder { get; set; } = () => { };
     public Func<bool> Notifications { get; set; } = () => true;
     public Action<bool> SetNotifications { get; set; } = _ => { };
+    public Func<bool> QuickSwitch { get; set; } = () => true;
+    public Action<bool> SetQuickSwitch { get; set; } = _ => { };
+    /// <summary>True when Ctrl+Alt+U could not be registered because another app owns it. The item stays checked (the setting is on) and says so.</summary>
+    public Func<bool> QuickSwitchTaken { get; set; } = () => false;
     public Func<ResolvedTheme> Theme { get; set; } = () => new ResolvedTheme(false, false);
     public Action CheckForUpdates { get; set; } = () => { };
     public Action Help { get; set; } = () => { };
@@ -35,12 +39,15 @@ internal sealed class TrayMenuModel
 internal sealed class TrayMenu
 {
     public const string LogonHeader = "Open BenchBar at logon";
+    public const string QuickSwitchHeader = "Quick Switch: Ctrl+Alt+U";
+    public const string QuickSwitchTakenHeader = "Quick Switch: Ctrl+Alt+U is used by another app";
 
     private readonly TrayMenuModel _model;
     private readonly MenuItem _logon = new() { Header = LogonHeader, IsCheckable = true };
     private readonly MenuItem _appearance = new() { Header = "Appearance" };
     private readonly MenuItem _runner = new() { Header = "Runner" };
     private readonly MenuItem _notifications = new() { Header = "Notifications", IsCheckable = true };
+    private readonly MenuItem _quickSwitch = new() { Header = QuickSwitchHeader, IsCheckable = true };
     private readonly Image _preview = new() { Width = 48, Height = 48, Stretch = Stretch.Uniform, SnapsToDevicePixels = true };
     private readonly TextBlock _previewName = new() { HorizontalAlignment = HorizontalAlignment.Center, Opacity = 0.7, Margin = new Thickness(0, 4, 0, 0) };
     private readonly DispatcherTimer _animation = new(DispatcherPriority.Background);
@@ -61,6 +68,7 @@ internal sealed class TrayMenu
 
         _logon.Click += (_, _) => model.SetLogon(_logon.IsChecked);
         _notifications.Click += (_, _) => model.SetNotifications(_notifications.IsChecked);
+        _quickSwitch.Click += (_, _) => model.SetQuickSwitch(_quickSwitch.IsChecked);
         foreach (var (mode, header) in new[] { (AppearanceMode.System, "System"), (AppearanceMode.Light, "Light"), (AppearanceMode.Dark, "Dark") })
         {
             var item = new MenuItem { Header = header, IsCheckable = true, Tag = mode };
@@ -81,6 +89,7 @@ internal sealed class TrayMenu
         Menu.Items.Add(_appearance);
         Menu.Items.Add(_runner);
         Menu.Items.Add(_notifications);
+        Menu.Items.Add(_quickSwitch);
         Menu.Items.Add(new Separator());
         foreach (var (header, click) in items)
         {
@@ -111,6 +120,10 @@ internal sealed class TrayMenu
     {
         _logon.IsChecked = _model.LogonEnabled();
         _notifications.IsChecked = _model.Notifications();
+        var taken = _model.QuickSwitchTaken();
+        // checked while the setting is on even if the key is taken: one click then turns the setting off, not two
+        _quickSwitch.IsChecked = _model.QuickSwitch();
+        _quickSwitch.Header = taken ? QuickSwitchTakenHeader : QuickSwitchHeader;
         var mode = _model.Appearance();
         foreach (var item in _appearance.Items.OfType<MenuItem>()) item.IsChecked = (AppearanceMode)item.Tag == mode;
     }

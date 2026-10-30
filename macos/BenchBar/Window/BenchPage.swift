@@ -187,6 +187,13 @@ struct BenchOverview: View {
             if !editorInMenu {
                 editorButton(editor).fixedSize()
             }
+            if let defaultRow = bench.siteRows.first(where: \.isDefault) {
+                OpenAsMenu(store: store, bench: bench, row: defaultRow) {
+                    router.findUserRequest = FindUserRequest(bench: bench.path, site: defaultRow.name)
+                    router.benchTab = .sites
+                }
+                .fixedSize()
+            }
             Button(defaultNeedsHosts ? "Set Up Site…" : "Open Site") {
                 if defaultNeedsHosts { router.benchTab = .sites }
                 else { Workspace.openSite(bench) }
@@ -244,6 +251,7 @@ struct BenchSites: View {
     @State private var addingSite = false
     @State private var hosts: HostsRun?
     @State private var dropping: String?
+    @State private var findingUser: String?
 
     private var busy: Bool { !store.canChange(bench) }
 
@@ -257,6 +265,7 @@ struct BenchSites: View {
                             .foregroundStyle(row.isDefault ? .yellow : .secondary)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(row.name)
+                                .help(row.developerMode && !row.isDefault && !row.needsHosts ? OpenAsMenuModel.notDefaultSiteHelp : "")
                             Text(row.needsHosts ? "no /etc/hosts line yet" : row.url)
                                 .font(.caption).foregroundStyle(row.needsHosts ? .orange : .secondary)
                             if let last = workbench.backups(of: row.name, on: bench)?.backups.first {
@@ -267,6 +276,7 @@ struct BenchSites: View {
                         if bench.activity?.hasPrefix("Back up \(row.name)") == true {
                             ProgressView().controlSize(.small)
                         }
+                        OpenAsMenu(store: store, bench: bench, row: row) { findingUser = row.name }
                         Button(row.needsHosts ? "Set Up…" : "Open") {
                             if row.needsHosts { openHosts() }
                             else { Workspace.open(row.url) }
@@ -285,8 +295,11 @@ struct BenchSites: View {
                         .disabled(busy)
                 }
             } footer: {
-                Text("The default site is the one benchup waits for, the runner pings and ⌘O opens.")
-                    .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("The default site is the one benchup waits for, the runner pings and ⌘O opens. Open as… works on it only.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    OpenAsNoticeLine(store: store)
+                }
             }
             if rows.count == 1 {
                 Section {
@@ -312,9 +325,15 @@ struct BenchSites: View {
         }
         .formStyle(.grouped)
         .task(id: bench.siteRows.map(\.name)) { await workbench.loadBackups(bench) }
-        .task { openRequestedHosts() }
+        .task { openRequestedHosts(); openRequestedFindUser() }
         .onChange(of: router?.hostsRequest) { openRequestedHosts() }
+        .onChange(of: router?.findUserRequest) { openRequestedFindUser() }
         .sheet(item: $hosts) { run in HostsSheet(run: run) { hosts = nil } }
+        .sheet(item: Binding(get: { findingUser.map(FindUserTarget.init) }, set: { findingUser = $0?.site })) { target in
+            if let row = rows.first(where: { $0.name == target.site }) {
+                FindUserSheet(store: store, bench: bench, row: row) { findingUser = nil }
+            }
+        }
         .sheet(item: Binding(get: { dropping.map(DropTarget.init) }, set: { dropping = $0?.site })) { target in
             SiteDropSheet(workbench: workbench, bench: bench, site: target.site) { dropping = nil }
         }
@@ -329,6 +348,12 @@ extension BenchSites {
         hosts = HostsRun(bench: bench, store: store)
     }
 
+    fileprivate func openRequestedFindUser() {
+        guard let request = router?.findUserRequest, request.bench == bench.path else { return }
+        router?.findUserRequest = nil
+        findingUser = request.site
+    }
+
     fileprivate func openRequestedHosts() {
         guard router?.hostsRequest == bench.path else { return }
         router?.hostsRequest = nil
@@ -337,6 +362,11 @@ extension BenchSites {
 }
 
 private struct DropTarget: Identifiable {
+    var site: String
+    var id: String { site }
+}
+
+private struct FindUserTarget: Identifiable {
     var site: String
     var id: String { site }
 }

@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var updater: Updater?
     private var about: AboutModel!
     private var updateOffer: UpdateOffer!
+    private var quickSwitch: QuickSwitchController!
     /// benchbar:// links that arrived before the bench list was loaded
     /// (a link can launch the app).
     private var pendingURLs: [URL] = []
@@ -65,6 +66,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             addHosts: { [weak self] bench in
                 guard let self else { return }
                 mainWindow.router.hostsRequest = bench.path
+                openBench(bench, tab: .sites, repair: false)
+            },
+            findUser: { [weak self] bench, site in
+                guard let self else { return }
+                mainWindow.router.findUserRequest = FindUserRequest(bench: bench.path, site: site)
                 openBench(bench, tab: .sites, repair: false)
             },
             newBench: { [weak self] in self?.openWizard() },
@@ -129,6 +135,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updateOffer.checkWithSparkle = { [weak self] in self?.updater?.checkForUpdates() }
         NSApp.mainMenu = makeMainMenu()
         setUpClicks()
+
+        quickSwitch = QuickSwitchController(store: store, settings: settings)
+        settings.onQuickSwitchChange = { [weak self] in self?.quickSwitch.sync() }
+        quickSwitch.sync()
 
         Task {
             await store.start()
