@@ -31,7 +31,31 @@ nonisolated final class FakeOpenAsCLI: OpenAsCLI, @unchecked Sendable {
     }
 }
 
+/// An Open as CLI whose answers wait until the test lets them through, to hold switches in flight.
+nonisolated final class GatedOpenAsCLI: OpenAsCLI, @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    var waitingCount: Int { lock.withLock { waiting.count } }
+
+    func releaseOne() {
+        let next: CheckedContinuation<Void, Never>? = lock.withLock { waiting.isEmpty ? nil : waiting.removeFirst() }
+        next?.resume()
+    }
+
+    func openAs(bench: String, site: String, user: String, path: String?) async throws(CLIError) -> OpenAsResult {
+        await withCheckedContinuation { continuation in lock.withLock { waiting.append(continuation) } }
+        return OpenAsResult(site: site, user: user, fullName: nil, userType: "System User", path: path ?? "/app",
+                            url: "http://\(site):8000/login?redirect-to=%2Fapp&sid=gated\(user.count)&t=1")
+    }
+
+    func users(bench: String, site: String, search: String?, limit: Int) async throws(CLIError) -> UserList {
+        UserList(site: site, users: [], truncated: false)
+    }
+}
+
 final class FakeBrowser: BrowserOpening {
+    var tabControlIssue: TabControlIssue?
     var opened: [URL] = []
     var replaced: [URL] = []
     var tab: URL?
@@ -60,7 +84,7 @@ struct OpenAsTests {
         OpenAsStore(defaults: try defaults ?? scratchDefaults(), keepPage: { keepPage }, browser: browser, checkSession: check)
     }
 
-    func switchTo(_ user: String, on store: OpenAsStore, cli: FakeOpenAsCLI, path: String? = nil) async -> String? {
+    func switchTo(_ user: String, on store: OpenAsStore, cli: any OpenAsCLI, path: String? = nil) async -> String? {
         await store.switchTo(user: user, bench: bench, site: site, siteURL: siteURL, path: path, client: cli)
     }
 
@@ -91,9 +115,11 @@ struct OpenAsTests {
         let info = try JSONDecoder().decode(SiteInfo.self, from: Data(old.utf8))
         #expect(info.developerMode == nil)
         #expect(SiteRow.make(sites: [info], defaultSite: "macdev", port: 8000).map(\.developerMode) == [false])
+        #expect(SiteRow.make(sites: [info], defaultSite: "macdev", port: 8000).map(\.developerModeKnown) == [false])
         var on = info
         on.developerMode = true
         #expect(SiteRow.make(sites: [on], defaultSite: "macdev", port: 8000).map(\.developerMode) == [true])
+        #expect(SiteRow.make(sites: [on], defaultSite: "macdev", port: 8000).map(\.developerModeKnown) == [true])
         let sent = #"{"name":"macdev","default":true,"hosts_entry":true,"ping_code":null,"developer_mode":true}"#
         #expect(try JSONDecoder().decode(SiteInfo.self, from: Data(sent.utf8)).developerMode == true)
     }
@@ -219,7 +245,52 @@ struct OpenAsTests {
         #expect(error == "macdev is not in developer mode, so benchbar will not sign in as another user.")
         #expect(browser.opened.isEmpty)
         #expect(store.recents(bench: bench, site: site).isEmpty)
-        #expect(store.switching.isEmpty)
+        #expect(!store.isSwitching(bench: bench, site: site))
+    }
+
+    @Test func theSpinnerStaysUntilTheLastOfTwoSwitchesOnASiteEnds() async throws {
+        let cli = GatedOpenAsCLI()
+        let store = try makeStore()
+        let first = Task { await switchTo("a@x.com", on: store, cli: cli) }
+        let second = Task { await switchTo("bb@x.com", on: store, cli: cli) }
+        while cli.waitingCount < 2 { await Task.yield() }
+        #expect(store.isSwitching(bench: bench, site: site))
+        #expect(!store.isSwitching(bench: bench, site: "other"))
+        cli.releaseOne()
+        while cli.waitingCount > 1 || store.recents(bench: bench, site: site).isEmpty { await Task.yield() }
+        #expect(store.isSwitching(bench: bench, site: site), "one switch is still running")
+        cli.releaseOne()
+        _ = await first.value
+        _ = await second.value
+        #expect(!store.isSwitching(bench: bench, site: site))
+    }
+
+    @Test func aSuccessClearsOnlyTheErrorAnEarlierSwitchLeft() throws {
+        let store = try makeStore()
+        #expect(store.lastError(afterSwitchOn: bench, current: "start failed", error: nil) == "start failed")
+        #expect(store.lastError(afterSwitchOn: bench, current: "start failed", error: "no session") == "no session")
+        #expect(store.lastError(afterSwitchOn: bench, current: "no session", error: nil) == nil)
+        #expect(store.lastError(afterSwitchOn: bench, current: "start failed", error: nil) == "start failed")
+        #expect(store.lastError(afterSwitchOn: "/other", current: "no session", error: nil) == "no session")
+    }
+
+    @Test func aBrowserProblemIsNotedOnceAndOnlyWithKeepThePageOn() async throws {
+        let browser = FakeBrowser()
+        browser.tabControlIssue = .automationDenied(browser: "Google Chrome")
+        let cli = FakeOpenAsCLI()
+        let off = try makeStore(browser: browser, keepPage: false)
+        _ = await switchTo("a@x.com", on: off, cli: cli)
+        #expect(off.notice == nil)
+
+        let store = try makeStore(browser: browser, keepPage: true)
+        _ = await switchTo("a@x.com", on: store, cli: cli)
+        #expect(store.notice == "Keep the page I'm on needs permission to control Google Chrome: System Settings → Privacy & Security → Automation")
+        store.dismissNotice()
+        _ = await switchTo("a@x.com", on: store, cli: cli)
+        #expect(store.notice == nil, "the same cause is told once per run")
+        browser.tabControlIssue = .firefox
+        _ = await switchTo("a@x.com", on: store, cli: cli)
+        #expect(store.notice?.hasPrefix("Firefox always gets a new tab") == true)
     }
 
     @Test func theSessionIDIsNotInUserDefaults() async throws {
@@ -315,8 +386,16 @@ struct OpenAsTests {
         ])
     }
 
+    @Test func withNoPinsTheMenuSaysHowToPin() {
+        #expect(OpenAsMenuModel.noPinsHint == "Pin people from Find User… to switch to them here")
+        let items = OpenAsMenuModel.items(pins: [], recents: [])
+        #expect(items == [.administrator, .pinHint, .divider(2), .findUser, .keepPage])
+        let pinned = OpenAsMenuModel.items(pins: [PinnedUser(user: "a@x.com", label: nil)], recents: [])
+        #expect(!pinned.contains(.pinHint))
+    }
+
     @Test func switchBackAndItsDividerAreHiddenWithoutAPreviousUser() {
-        #expect(OpenAsMenuModel.items(pins: [], recents: []) == [.administrator, .divider(2), .findUser, .keepPage])
+        #expect(OpenAsMenuModel.items(pins: [], recents: []).first == .administrator)
         let one = [RecentUser(user: "a@x.com", fullName: nil)]
         #expect(OpenAsMenuModel.items(pins: [], recents: one).first == .administrator)
     }
@@ -335,7 +414,7 @@ struct OpenAsTests {
         #expect(!items.contains { if case .pin = $0 { true } else { false } })
     }
 
-    @Test func theMenuShowsOnlyForARunningDeveloperModeSiteWithAHostsLine() {
+    @Test func theMenuIsUsableOnlyOnARunningDeveloperModeDefaultSiteWithAHostsLine() {
         let ready = SiteRow(name: "macdev", isDefault: true, url: siteURL, needsHosts: false, developerMode: true)
         #expect(OpenAsMenuModel.isAvailable(ready, benchRunning: true))
         #expect(!OpenAsMenuModel.isAvailable(ready, benchRunning: false))
@@ -345,6 +424,32 @@ struct OpenAsTests {
         var unresolved = ready
         unresolved.needsHosts = true
         #expect(!OpenAsMenuModel.isAvailable(unresolved, benchRunning: true))
+    }
+
+    @Test func aSiteThatIsNotTheDefaultHasNoOpenAsBecausePortServesOnlyTheDefault() {
+        let second = SiteRow(name: "second", isDefault: false, url: "http://second:8000", needsHosts: false, developerMode: true)
+        #expect(!OpenAsMenuModel.isAvailable(second, benchRunning: true))
+        #expect(OpenAsMenuModel.availability(second, benchRunning: true) == .notDefaultSite)
+        #expect(OpenAsMenuModel.notDefaultSiteHelp == "Open as works on the default site; port 8000 serves only it")
+    }
+
+    @Test func eachReasonTheControlIsDisabledHasItsOwnHelpText() {
+        let ready = SiteRow(name: "macdev", isDefault: true, url: siteURL, needsHosts: false, developerMode: true)
+        func help(_ row: SiteRow, running: Bool = true) -> String? {
+            OpenAsMenuModel.disabledHelp(OpenAsMenuModel.availability(row, benchRunning: running), site: row.name, bench: "frappe-bench")
+        }
+        #expect(help(ready) == nil)
+        #expect(help(ready, running: false) == "Start frappe-bench first")
+        var off = ready
+        off.developerMode = false
+        #expect(help(off) == "Turn on developer_mode for macdev to use Open as")
+        var old = off
+        old.developerModeKnown = false
+        #expect(help(old) == "Update the benchbar CLI to use Open as")
+        var hosts = ready
+        hosts.needsHosts = true
+        #expect(OpenAsMenuModel.availability(hosts, benchRunning: true) == .needsHosts)
+        #expect(help(hosts) == nil, "Set Up… is the action there")
     }
 
     @Test func theShortcutsAreCommandDigitsAndShiftCommandO() {
@@ -442,6 +547,22 @@ struct OpenAsTests {
         let script = BrowserRouter.replaceScript(bundleID: "com.brave.Browser", url: "http://h/a\"b\\c\nd") ?? ""
         #expect(script.hasSuffix(#"to "http://h/a\"b\\cd""# + "\nend timeout"))
         #expect(script.split(separator: "\n").count == 3, "a line break in the address cannot add a line to the script")
+    }
+
+    @Test func theTestingBrowserIsTheLastOneUsedElseTheFirstRunningSupportedOne() {
+        let chrome = "com.google.Chrome"
+        let running: Set = [chrome, BrowserRouter.firefox, "com.apple.finder"]
+        #expect(BrowserRouter.browser(testing: BrowserRouter.firefox, running: running) == BrowserRouter.firefox)
+        #expect(BrowserRouter.browser(testing: nil, running: running) == chrome)
+        #expect(BrowserRouter.browser(testing: BrowserRouter.safari, running: running) == chrome, "the tested one has quit")
+        #expect(BrowserRouter.browser(testing: nil, running: ["com.apple.finder"]) == nil)
+        #expect(BrowserRouter.browser(testing: nil, running: [BrowserRouter.firefox, BrowserRouter.safari]) == BrowserRouter.safari)
+    }
+
+    @Test func theBrowserNoteNamesTheBrowserAndTheSettingsPath() {
+        #expect(BrowserRouter.displayName("com.google.Chrome") == "Google Chrome")
+        #expect(BrowserRouter.displayName(BrowserRouter.safari) == "Safari")
+        #expect(TabControlIssue.automationDenied(browser: "Safari").note.hasSuffix("System Settings → Privacy & Security → Automation"))
     }
 
     @Test func onlyTheSupportedBrowsersAreTracked() {

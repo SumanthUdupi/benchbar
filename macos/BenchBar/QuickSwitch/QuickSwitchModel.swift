@@ -5,6 +5,8 @@ nonisolated struct QuickSwitchBench: Equatable, Sendable {
     var path: String
     var running: Bool
     var rows: [SiteRow]
+
+    var name: String { URL(fileURLWithPath: path).lastPathComponent }
 }
 
 /// A site the panel can switch on.
@@ -58,8 +60,14 @@ nonisolated struct QuickSwitchRow: Equatable, Sendable, Identifiable {
         }
     }
 
-    /// Shown next to the ✓.
-    var hint: String? { isCurrent ? "current" : nil }
+    /// Shown next to the ✓. It is BenchBar's own record of its last switch, not
+    /// the browser's live user: a manual logout or a relaunch makes it stale.
+    var hint: String? { isCurrent ? "last opened" : nil }
+
+    /// What VoiceOver reads: the title, the user id under it, and the state.
+    var spokenLabel: String {
+        [title, detail, hint].compactMap { $0 }.joined(separator: ", ")
+    }
 }
 
 /// Everything the Quick Switch panel decides, as plain values: the rows, the
@@ -75,14 +83,26 @@ nonisolated struct QuickSwitchModel: Equatable, Sendable {
     static let noMatches = "No users match"
     static let searchFailedCopy = "Could not search users"
 
+    static let alreadySwitchingCopy = "Already switching…"
+    static let searchingCopy = "Searching…"
+
+    /// Why there is nothing to switch on, each with its own fix.
     enum Blocker: Equatable, Sendable {
-        case noDeveloperSite
-        case benchStopped
+        case loading
+        case noBench
+        case cliTooOld
+        case developerModeOff(site: String)
+        case hostsMissing(site: String)
+        case benchStopped(bench: String)
 
         var text: String {
             switch self {
-            case .noDeveloperSite: "No site in developer mode — run benchbar open --help"
-            case .benchStopped: "Start the bench first (⌘U in BenchBar)"
+            case .loading: "Loading benches…"
+            case .noBench: "No bench to open as a user on. Add one in BenchBar."
+            case .cliTooOld: "Update the benchbar CLI to use Open as"
+            case .developerModeOff(let site): "Turn on developer_mode for \(site)"
+            case .hostsMissing(let site): "Add the hosts line for \(site) in the BenchBar window"
+            case .benchStopped(let bench): "Start \(bench) first"
             }
         }
     }
@@ -116,8 +136,9 @@ nonisolated struct QuickSwitchModel: Equatable, Sendable {
 
     // MARK: building
 
-    /// The selected bench's sites first, then the others'. Only a running
-    /// bench's developer_mode site that resolves is offered, as in the menu.
+    /// The selected bench's default site first, then the other benches'. Only
+    /// a running bench's default site, in developer mode and resolvable, is
+    /// offered, as in the menu: `bench serve` serves that one site only.
     static func targets(benches: [QuickSwitchBench], selectedPath: String?) -> [QuickSwitchTarget] {
         let ordered = benches.filter { $0.path == selectedPath } + benches.filter { $0.path != selectedPath }
         return ordered.flatMap { bench in
@@ -127,22 +148,35 @@ nonisolated struct QuickSwitchModel: Equatable, Sendable {
         }
     }
 
-    /// Why there is nothing to switch on: a stopped bench with a developer
-    /// site is fixed by starting it, anything else needs developer mode.
-    static func blocker(benches: [QuickSwitchBench]) -> Blocker {
-        let startable = benches.contains { bench in
-            !bench.running && bench.rows.contains { $0.developerMode && !$0.needsHosts }
+    /// Why there is nothing to switch on. A stopped bench whose default site
+    /// is ready is fixed by starting it; otherwise the first default site's
+    /// own problem is named.
+    static func blocker(benches: [QuickSwitchBench], loaded: Bool, selectedPath: String?) -> Blocker {
+        if !loaded { return .loading }
+        let ordered = benches.filter { $0.path == selectedPath } + benches.filter { $0.path != selectedPath }
+        let defaults = ordered.map { (bench: $0, row: $0.rows.first(where: \.isDefault)) }
+        guard !defaults.isEmpty else { return .noBench }
+        if let stopped = defaults.first(where: { entry in
+            entry.row.map { !entry.bench.running && $0.developerMode && !$0.needsHosts } ?? false
+        }) {
+            return .benchStopped(bench: stopped.bench.name)
         }
-        return startable ? .benchStopped : .noDeveloperSite
+        if defaults.allSatisfy({ $0.row?.developerModeKnown != true }) { return .cliTooOld }
+        if let row = defaults.compactMap(\.row).first(where: { $0.developerMode && $0.needsHosts }) {
+            return .hostsMissing(site: row.name)
+        }
+        let first = defaults[0]
+        return .developerModeOff(site: first.row?.name ?? first.bench.name)
     }
 
     /// `lastSwitchedKey` is the site the last switch happened on; without it
     /// (or when it is not offered) the first target, the selected bench's
     /// default site, opens.
+    /// `loaded` is false until the bench list first arrived.
     init(benches: [QuickSwitchBench], selectedPath: String?, lastSwitchedKey: String?,
-         pins: [String: [PinnedUser]], recents: [String: [RecentUser]]) {
+         pins: [String: [PinnedUser]], recents: [String: [RecentUser]], loaded: Bool = true) {
         targets = Self.targets(benches: benches, selectedPath: selectedPath)
-        blocker = targets.isEmpty ? Self.blocker(benches: benches) : nil
+        blocker = targets.isEmpty ? Self.blocker(benches: benches, loaded: loaded, selectedPath: selectedPath) : nil
         pinsBySite = pins
         recentsBySite = recents
         siteIndex = targets.firstIndex { $0.id == lastSwitchedKey } ?? 0
@@ -153,6 +187,8 @@ nonisolated struct QuickSwitchModel: Equatable, Sendable {
     var target: QuickSwitchTarget? { targets.indices.contains(siteIndex) ? targets[siteIndex] : nil }
 
     var title: String { target.map { "Open \($0.site) as…" } ?? "Open as…" }
+
+    var spokenTitle: String { target.map { "Open \($0.site) as" } ?? "Open as" }
 
     var canCycleSites: Bool { targets.count > 1 }
 
@@ -197,6 +233,24 @@ nonisolated struct QuickSwitchModel: Equatable, Sendable {
     var selectable: [QuickSwitchRow] { rows + otherRows }
 
     var searching: Bool { searchRequest != nil && remoteQuery != trimmedQuery }
+
+    /// The "Other users" heading is for results only: not while asking, not when nothing came back.
+    var showsOtherUsersHeading: Bool { !otherRows.isEmpty }
+
+    /// Shown under the list while the user search is in flight.
+    var searchingText: String? { searching ? Self.searchingCopy : nil }
+
+    /// Said under the list while nobody is pinned: how to pin.
+    var pinHint: String? { pins.isEmpty ? OpenAsMenuModel.noPinsHint : nil }
+
+    /// The keys that do something now: the digits only while they would switch.
+    var footerHint: String {
+        let digitsActive = digitsSwitch && rows.contains { $0.digit != nil }
+        return (["↑↓ select", "↩ switch"] + (digitsActive ? ["0–9 quick pick"] : []) + ["esc close"]).joined(separator: "   ")
+    }
+
+    /// True when `other` would show the same sites and the same reason for none.
+    func offersSame(as other: QuickSwitchModel) -> Bool { targets == other.targets && blocker == other.blocker }
 
     /// "No users match" once typing left nothing to pick and nothing is still being asked.
     var emptyResultCopy: String? {
@@ -243,7 +297,7 @@ nonisolated struct QuickSwitchModel: Equatable, Sendable {
                                       title: OpenAsStore.administrator, detail: nil,
                                       isCurrent: current == OpenAsStore.administrator, digit: 0,
                                       searchable: [OpenAsStore.administrator])
-            case .divider, .findUser, .keepPage:
+            case .divider, .pinHint, .findUser, .keepPage:
                 return nil
             }
         }
@@ -266,7 +320,9 @@ nonisolated struct QuickSwitchModel: Equatable, Sendable {
         case 53: return .escape
         case 48: return .tab
         default:
-            guard digitsSwitch, let text = characters, text.count == 1, let digit = Int(text) else { return nil }
+            // a digit with no row stays text, so an id that starts with one can be typed
+            guard digitsSwitch, let text = characters, text.count == 1, let digit = Int(text),
+                  rows.contains(where: { $0.digit == digit }) else { return nil }
             return .digit(digit)
         }
     }

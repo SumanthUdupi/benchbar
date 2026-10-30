@@ -187,6 +187,13 @@ struct BenchOverview: View {
             if !editorInMenu {
                 editorButton(editor).fixedSize()
             }
+            if let defaultRow = bench.siteRows.first(where: \.isDefault) {
+                OpenAsMenu(store: store, bench: bench, row: defaultRow) {
+                    router.findUserRequest = FindUserRequest(bench: bench.path, site: defaultRow.name)
+                    router.benchTab = .sites
+                }
+                .fixedSize()
+            }
             Button(defaultNeedsHosts ? "Set Up Site…" : "Open Site") {
                 if defaultNeedsHosts { router.benchTab = .sites }
                 else { Workspace.openSite(bench) }
@@ -258,6 +265,7 @@ struct BenchSites: View {
                             .foregroundStyle(row.isDefault ? .yellow : .secondary)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(row.name)
+                                .help(row.developerMode && !row.isDefault && !row.needsHosts ? OpenAsMenuModel.notDefaultSiteHelp : "")
                             Text(row.needsHosts ? "no /etc/hosts line yet" : row.url)
                                 .font(.caption).foregroundStyle(row.needsHosts ? .orange : .secondary)
                             if let last = workbench.backups(of: row.name, on: bench)?.backups.first {
@@ -287,8 +295,11 @@ struct BenchSites: View {
                         .disabled(busy)
                 }
             } footer: {
-                Text("The default site is the one benchup waits for, the runner pings and ⌘O opens.")
-                    .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("The default site is the one benchup waits for, the runner pings and ⌘O opens. Open as… works on it only.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    OpenAsNoticeLine(store: store)
+                }
             }
             if rows.count == 1 {
                 Section {

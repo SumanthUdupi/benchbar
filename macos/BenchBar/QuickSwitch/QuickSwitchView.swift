@@ -1,3 +1,4 @@
+import AppKit
 import Observation
 import SwiftUI
 
@@ -26,6 +27,14 @@ final class QuickSwitchSession {
     var query: String {
         get { model.query }
         set { model.setQuery(newValue) }
+    }
+
+    /// A fresher bench state arrived while the panel is up. It replaces the
+    /// model only when it changes what is offered, and never mid-switch or
+    /// mid-typing, so the user's place is not lost for nothing.
+    func refresh(with fresh: QuickSwitchModel) {
+        guard !model.isSwitching, model.query.isEmpty, !model.offersSame(as: fresh) else { return }
+        model = fresh
     }
 
     func press(_ key: QuickSwitchKey) {
@@ -99,6 +108,15 @@ struct QuickSwitchView: View {
         .padding(24)
         .frame(maxHeight: .infinity, alignment: .top)
         .onAppear { typing = true }
+        .onChange(of: model.isSwitching) { _, switching in
+            // a disabled field loses focus; a failed switch leaves the user to retry by typing
+            if !switching { typing = true }
+        }
+        .onChange(of: model.errorMessage) { _, message in
+            if let message { Self.announce(message) }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(model.spokenTitle)
         .task(id: model.searchRequest) {
             if let request = model.searchRequest { await session.search(request) }
         }
@@ -120,6 +138,7 @@ struct QuickSwitchView: View {
         TextField("Type to filter", text: Binding(get: { session.query }, set: { session.query = $0 }))
             .textFieldStyle(.plain)
             .focused($typing)
+            .accessibilityLabel("User to open as, type to filter")
             .padding(.horizontal, 16)
             .padding(.bottom, 10)
             .disabled(model.isSwitching)
@@ -129,19 +148,26 @@ struct QuickSwitchView: View {
         let rows = model.rows
         let others = model.otherRows
         let selectedID = model.selectable.indices.contains(model.selection) ? model.selectable[model.selection].id : nil
-        let height = Self.listHeight(rows: rows.count, others: others.count, hasMessage: model.emptyResultCopy != nil || model.searching)
+        let height = Self.listHeight(rows: rows.count, others: others.count, hasMessage: model.emptyResultCopy != nil || model.searching
+                                    || (model.pinHint != nil && model.trimmedQuery.isEmpty))
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     ForEach(rows) { row in line(row, selected: row.id == selectedID) }
-                    if !others.isEmpty || model.searching && !rows.isEmpty {
+                    if model.showsOtherUsersHeading {
                         sectionTitle("Other users")
                         ForEach(others) { row in line(row, selected: row.id == selectedID) }
                     }
                     if let copy = model.emptyResultCopy {
                         Text(copy).foregroundStyle(.secondary).padding(.horizontal, 16).frame(height: Self.rowHeight)
-                    } else if model.searching && rows.isEmpty {
-                        ProgressView().controlSize(.small).padding(.horizontal, 16).frame(height: Self.rowHeight)
+                    } else if let copy = model.searchingText {
+                        HStack(spacing: 8) {
+                            ProgressView().controlSize(.small)
+                            Text(copy).foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 16).frame(height: Self.rowHeight)
+                    } else if let hint = model.pinHint, model.trimmedQuery.isEmpty {
+                        Text(hint).font(.callout).foregroundStyle(.secondary).padding(.horizontal, 16).frame(height: Self.rowHeight)
                     }
                 }
             }
@@ -188,12 +214,18 @@ struct QuickSwitchView: View {
         .frame(height: Self.rowHeight)
         .background(selected ? Color.accentColor.opacity(0.22) : .clear)
         .id(row.id)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(row.spokenLabel)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
+    private static func announce(_ text: String) {
+        NSAccessibility.post(element: NSApplication.shared, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    }
+
     private var footer: some View {
-        Text("↑↓ select   ↩ switch   0–9 quick pick   ⎋ close")
+        Text(model.footerHint)
             .font(.caption)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 16)

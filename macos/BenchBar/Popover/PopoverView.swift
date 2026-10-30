@@ -257,10 +257,11 @@ struct SitesSection: View {
                             .font(.caption).foregroundStyle(row.needsHosts ? .orange : .secondary)
                     }
                     Spacer(minLength: 4)
-                    OpenAsMenu(store: store, bench: bench, row: row, shortcuts: row.isDefault) { findUser(row.name) }
+                    OpenAsMenu(store: store, bench: bench, row: row, shortcuts: row.isDefault, compact: true) { findUser(row.name) }
                     siteAction(row)
                 }
             }
+            OpenAsNoticeLine(store: store)
             if SiteRow.hostsFix(rows, bench: bench.path) != nil {
                 Banner(systemImage: "network", tint: .orange,
                        text: "A site has no /etc/hosts line, so its name does not resolve. Adding it asks for your password.", command: nil,

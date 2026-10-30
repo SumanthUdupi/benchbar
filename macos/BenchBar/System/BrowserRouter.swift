@@ -7,11 +7,28 @@ protocol BrowserOpening {
     func frontTabURL() async -> URL?
     /// Sends the front tab to `url`; false when it could not.
     func replaceFrontTab(with url: URL) async -> Bool
+    /// Why "Keep the page I'm on" cannot work with the testing browser, nil when nothing is known to be wrong.
+    var tabControlIssue: TabControlIssue? { get }
+}
+
+/// A reason the browser's tab cannot be read or replaced; `OpenAsStore` tells the user once.
+nonisolated enum TabControlIssue: Hashable, Sendable {
+    case automationDenied(browser: String)
+    case firefox
+
+    var note: String {
+        switch self {
+        case .automationDenied(let browser):
+            "Keep the page I'm on needs permission to control \(browser): System Settings → Privacy & Security → Automation"
+        case .firefox:
+            "Firefox always gets a new tab: Keep the page I'm on cannot replace its current tab."
+        }
+    }
 }
 
 /// Picks the browser a switch opens in: the supported browser that was
-/// frontmost last (the one whose cookies are being tested), not the default
-/// browser, which may be another one. With "Keep the page I'm on" it also
+/// frontmost last (the one whose cookies are being tested), else the first
+/// supported browser that runs, and only then the default browser. With "Keep the page I'm on" it also
 /// reads and replaces that browser's front tab through Apple Events.
 final class BrowserRouter: BrowserOpening {
     nonisolated static let safari = "com.apple.Safari"
@@ -20,7 +37,11 @@ final class BrowserRouter: BrowserOpening {
     nonisolated static let supported = [safari, "com.google.Chrome", "company.thebrowser.Browser", "com.brave.Browser",
                                          "com.microsoft.edgemac", firefox]
 
+    /// Apple's "not authorized to send Apple events" (errAEEventNotPermitted).
+    private nonisolated static let automationDeniedError = -1743
+
     private(set) var testingBrowser: String?
+    private var deniedBrowser: String?
     private var observer: NSObjectProtocol?
 
     init() {
@@ -48,20 +69,31 @@ final class BrowserRouter: BrowserOpening {
 
     func frontTabURL() async -> URL? {
         guard let id = scriptableBrowser, let source = Self.readScript(bundleID: id),
-              let text = run(source)?.stringValue else { return nil }
+              let text = run(source, bundleID: id)?.stringValue else { return nil }
         return URL(string: text)
     }
 
+    /// On success the browser is brought to the front: BenchBar is frontmost
+    /// when the switch started from its popover or window, and the new page would stay behind it.
     func replaceFrontTab(with url: URL) async -> Bool {
-        guard let id = scriptableBrowser, let source = Self.replaceScript(bundleID: id, url: url.absoluteString) else { return false }
-        return run(source) != nil
+        guard let id = scriptableBrowser, let source = Self.replaceScript(bundleID: id, url: url.absoluteString),
+              run(source, bundleID: id) != nil else { return false }
+        NSRunningApplication.runningApplications(withBundleIdentifier: id).first?.activate()
+        return true
+    }
+
+    var tabControlIssue: TabControlIssue? {
+        if let deniedBrowser { return .automationDenied(browser: Self.displayName(deniedBrowser)) }
+        return runningTestingBrowser == Self.firefox ? .firefox : nil
     }
 
     /// The testing browser, only while it runs: `tell application` would launch it.
     private var runningTestingBrowser: String? {
-        guard let id = testingBrowser,
-              !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty else { return nil }
-        return id
+        Self.browser(testing: testingBrowser, running: Set(Self.supported.filter(isRunning)))
+    }
+
+    private func isRunning(_ bundleID: String) -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
     }
 
     /// Firefox has no AppleScript dictionary for its tabs.
@@ -69,13 +101,38 @@ final class BrowserRouter: BrowserOpening {
         runningTestingBrowser.flatMap { $0 == Self.firefox ? nil : $0 }
     }
 
-    private func run(_ source: String) -> NSAppleEventDescriptor? {
+    private func run(_ source: String, bundleID: String) -> NSAppleEventDescriptor? {
         var failure: NSDictionary?
         let result = NSAppleScript(source: source)?.executeAndReturnError(&failure)
-        return failure == nil ? result : nil
+        guard let failure else {
+            deniedBrowser = nil
+            return result
+        }
+        // Only a refused permission is worth telling the user; "no window open" and the like are normal.
+        if (failure["NSAppleScriptErrorNumber"] as? Int) == Self.automationDeniedError { deniedBrowser = bundleID }
+        return nil
     }
 
     // MARK: pure
+
+    /// The browser a switch uses: the one tested last while it runs, else the
+    /// first supported one that runs (in `supported` order), else nil for the default browser.
+    nonisolated static func browser(testing: String?, running: Set<String>) -> String? {
+        if let testing, running.contains(testing) { return testing }
+        return supported.first(where: running.contains)
+    }
+
+    nonisolated static func displayName(_ bundleID: String) -> String {
+        switch bundleID {
+        case safari: "Safari"
+        case firefox: "Firefox"
+        case "com.google.Chrome": "Google Chrome"
+        case "company.thebrowser.Browser": "Arc"
+        case "com.brave.Browser": "Brave"
+        case "com.microsoft.edgemac": "Microsoft Edge"
+        default: bundleID
+        }
+    }
 
     /// Same scheme, host and port: the tab is on the site being switched. The
     /// bench also serves its default site at 127.0.0.1 and localhost on its

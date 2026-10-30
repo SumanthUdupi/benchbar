@@ -35,8 +35,11 @@ final class OpenAsStore {
 
     private(set) var pins: [String: [PinnedUser]]
     private(set) var recentsBySite: [String: [RecentUser]] = [:]
-    /// Sites with a switch running ("<bench>|<site>"): their menu shows a spinner.
-    private(set) var switching: Set<String> = []
+    /// Switches running per site ("<bench>|<site>"): the menu shows a spinner while it is above 0.
+    /// A count, not a flag: with two switches on one site, the first to end must not stop the spinner.
+    private(set) var switchingCount: [String: Int] = [:]
+    /// A one-time explanation of why Keep the page I'm on did nothing; `dismissNotice` clears it.
+    private(set) var notice: String?
     /// The site ("<bench>|<site>") the last switch happened on: Quick Switch opens there.
     private(set) var lastSwitchedKey: String?
 
@@ -47,6 +50,8 @@ final class OpenAsStore {
     @ObservationIgnored private let clock: () -> Date
     @ObservationIgnored private var sessions: [String: Session] = [:]
     @ObservationIgnored private var lastMillis = 0
+    @ObservationIgnored private var noticesShown: Set<TabControlIssue> = []
+    @ObservationIgnored private var errorsByBench: [String: String] = [:]
 
     /// `checkSession(siteURL, sid)` answers with the user the id belongs to, nil when nothing answered.
     init(defaults: UserDefaults = .standard,
@@ -69,6 +74,22 @@ final class OpenAsStore {
     }
 
     nonisolated static func siteKey(bench: String, site: String) -> String { "\(bench)|\(site)" }
+
+    func isSwitching(bench: String, site: String) -> Bool {
+        (switchingCount[Self.siteKey(bench: bench, site: site)] ?? 0) > 0
+    }
+
+    func dismissNotice() { notice = nil }
+
+    /// What `bench.lastError` becomes after a switch on `bench`. A failure
+    /// replaces it; a success clears only the error an earlier switch put there,
+    /// so an unrelated one (a failed start) stays.
+    func lastError(afterSwitchOn bench: String, current: String?, error: String?) -> String? {
+        let mine = errorsByBench[bench]
+        errorsByBench[bench] = error
+        if let error { return error }
+        return current == mine ? nil : current
+    }
 
     // MARK: pins
 
@@ -143,10 +164,14 @@ final class OpenAsStore {
                   isDefaultSite: Bool = false, fullName: String? = nil, client: any OpenAsCLI) async -> String? {
         let siteKey = Self.siteKey(bench: bench, site: site)
         let sessionKey = "\(siteKey)|\(user)"
-        switching.insert(siteKey)
-        defer { switching.remove(siteKey) }
+        switchingCount[siteKey, default: 0] += 1
+        defer {
+            let left = (switchingCount[siteKey] ?? 1) - 1
+            switchingCount[siteKey] = left > 0 ? left : nil
+        }
 
         let keptTab = await tabToKeep(siteURL: siteURL, isDefaultSite: isDefaultSite)
+        defer { noteTabControlIssue() }
         let landing = keptTab.map(BrowserRouter.path(of:)) ?? path
 
         var link: URL
@@ -186,6 +211,12 @@ final class OpenAsStore {
         return BrowserRouter.path(of: tab).hasPrefix("//") ? nil : tab
     }
 
+    /// Once per app run and per cause, when Keep the page I'm on is on but the browser's tab is out of reach.
+    private func noteTabControlIssue() {
+        guard keepPage(), let issue = browser.tabControlIssue, noticesShown.insert(issue).inserted else { return }
+        notice = issue.note
+    }
+
     /// Milliseconds since 1970, strictly increasing: two links in the same
     /// millisecond would still differ, and a browser would not reuse a cached 301.
     private func nextMillis() -> Int {
@@ -195,16 +226,17 @@ final class OpenAsStore {
 }
 
 extension BenchStore {
-    /// "Open as…" for one site row: errors land on the bench like any other action.
-    func switchUser(_ user: String, fullName: String? = nil, on bench: BenchModel, row: SiteRow, path: String? = nil) async {
+    /// "Open as…" for one site row. A failure lands on the bench like any
+    /// other action's and is also returned; an unrelated error already there stays.
+    @discardableResult
+    func switchUser(_ user: String, fullName: String? = nil, on bench: BenchModel, row: SiteRow, path: String? = nil) async -> String? {
         guard let client = cliClient else {
             bench.lastError = Self.noCLIMessage
-            return
+            return Self.noCLIMessage
         }
-        bench.lastError = nil
-        if let error = await openAs.switchTo(user: user, bench: bench.path, site: row.name, siteURL: row.url, path: path,
-                                             isDefaultSite: row.isDefault, fullName: fullName, client: client) {
-            bench.lastError = error
-        }
+        let error = await openAs.switchTo(user: user, bench: bench.path, site: row.name, siteURL: row.url, path: path,
+                                          isDefaultSite: row.isDefault, fullName: fullName, client: client)
+        bench.lastError = openAs.lastError(afterSwitchOn: bench.path, current: bench.lastError, error: error)
+        return error
     }
 }

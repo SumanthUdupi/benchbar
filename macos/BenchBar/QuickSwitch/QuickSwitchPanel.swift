@@ -79,11 +79,15 @@ final class QuickSwitchController {
         if panel == nil { show() } else { close() }
     }
 
-    private func show() {
+    private func makeModel(lastSwitchedKey: String?) -> QuickSwitchModel {
         let benches = store.benches.map { QuickSwitchBench(path: $0.path, running: $0.state == .running, rows: $0.siteRows) }
-        let model = QuickSwitchModel(benches: benches, selectedPath: store.selected?.path,
-                                     lastSwitchedKey: store.openAs.lastSwitchedKey,
-                                     pins: store.openAs.pins, recents: store.openAs.recentsBySite)
+        return QuickSwitchModel(benches: benches, selectedPath: store.selected?.path, lastSwitchedKey: lastSwitchedKey,
+                                pins: store.openAs.pins, recents: store.openAs.recentsBySite,
+                                loaded: store.hasLoadedBenches || store.cliClient == nil)
+    }
+
+    private func show() {
+        let model = makeModel(lastSwitchedKey: store.openAs.lastSwitchedKey)
         shown += 1
         let opening = shown
         let session = QuickSwitchSession(
@@ -98,6 +102,15 @@ final class QuickSwitchController {
         self.panel = panel
         // not NSApp.activate: the browser has to stay frontmost
         panel.makeKeyAndOrderFront(nil)
+        Task { await refreshWhileOpen(session, panelNumber: opening) }
+    }
+
+    /// The cached bench states can be old (a bench started from Terminal): ask once, no polling, and
+    /// update the panel if the answer changes what it offers.
+    private func refreshWhileOpen(_ session: QuickSwitchSession, panelNumber: Int) async {
+        if store.hasLoadedBenches { await store.refreshAll() } else { await store.reloadBenches() }
+        guard panel != nil, shown == panelNumber else { return }
+        session.refresh(with: makeModel(lastSwitchedKey: session.model.target?.id ?? store.openAs.lastSwitchedKey))
     }
 
     private func close() {
@@ -123,9 +136,10 @@ final class QuickSwitchController {
               let row = bench.siteRows.first(where: { $0.name == request.target.site }) else {
             return "That site is no longer available."
         }
-        await store.switchUser(request.user, fullName: request.fullName, on: bench, row: row)
-        guard panel != nil, shown == panelNumber, let error = bench.lastError else { return nil }
-        bench.lastError = nil
+        if store.openAs.isSwitching(bench: bench.path, site: row.name) { return QuickSwitchModel.alreadySwitchingCopy }
+        let error = await store.switchUser(request.user, fullName: request.fullName, on: bench, row: row)
+        guard panel != nil, shown == panelNumber, let error else { return nil }
+        if bench.lastError == error { bench.lastError = nil }
         return error
     }
 
