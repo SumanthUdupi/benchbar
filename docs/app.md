@@ -50,6 +50,7 @@ top chooses which bench the popover shows.
 | ⌘M | The BenchBar window |
 | ⌘0, ⌘1 to ⌘9 | Open the default site as Administrator, or as a pinned user ([Open as a user](#open-as-a-user)) |
 | ⇧⌘O | Switch back to the previous user |
+| ⌃⌥U | Quick Switch: the pinned-user panel, from any app ([Quick Switch](#quick-switch)) |
 
 ## Open as a user
 
@@ -87,6 +88,36 @@ forgets them. Nothing about a session is written to disk or logged. The side
 effects on the site (last login, `on_login` hooks, older sessions of that user
 signed out, restrictions that still apply) are the ones
 [`benchbar open`](reference/cli/other.md#open) lists.
+
+## Quick Switch
+
+⌃⌥U opens a small floating list in the middle of the screen, from any app, so you can
+change user without leaving the browser or reaching for the mouse. BenchBar does not
+come to the front: the browser stays the frontmost app, so the browser BenchBar opens in
+and **Keep the page I'm on** work as they do from the menu.
+
+The panel is titled `Open {site} as…`. The site is the one you last switched on, else the
+selected bench's default site; only sites that have the Open as menu are offered. The rows
+are **Switch Back to {name}**, your pins and **Administrator**; the current user has a ✓
+and "current". The first row is selected, so **⌃⌥U then ↩ toggles between the last two users**.
+
+| Key | Action |
+|---|---|
+| ↑ ↓ | Move the selection, wrapping around |
+| ↩ | Switch. A spinner shows on the row, the panel closes when the browser has the new user, and a failure shows inline |
+| ⎋ | Close |
+| 0 to 9 | Switch at once while the field is empty: 0 is Administrator, 1 to 9 the pins in order |
+| ⇥ | Next site |
+| Typing | Filters the rows by label, user id or full name |
+
+With two or more characters typed, the panel also searches the site's users (limit 8, after a
+short pause) and lists them under **Other users**. Nothing matching shows `No users match`.
+Clicking anywhere else closes the panel. With no developer mode site it says so and points at
+`benchbar open --help`; with a stopped bench it says to start it first.
+
+Settings has **Quick Switch: ⌃⌥U**, on by default. It registers the key with macOS directly and
+needs no Accessibility permission. If another app already has ⌃⌥U, Settings says
+"⌃⌥U is used by another app" and Quick Switch stays off; turning the setting off and on again tries once more.
 
 ## Links for Raycast and Shortcuts
 

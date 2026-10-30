@@ -37,6 +37,8 @@ final class OpenAsStore {
     private(set) var recentsBySite: [String: [RecentUser]] = [:]
     /// Sites with a switch running ("<bench>|<site>"): their menu shows a spinner.
     private(set) var switching: Set<String> = []
+    /// The site ("<bench>|<site>") the last switch happened on: Quick Switch opens there.
+    private(set) var lastSwitchedKey: String?
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let keepPage: () -> Bool
@@ -66,7 +68,7 @@ final class OpenAsStore {
         return await SessionProbe.loggedUser(sessionID: sid, site: host, port: siteURL.port ?? 80)
     }
 
-    static func siteKey(bench: String, site: String) -> String { "\(bench)|\(site)" }
+    nonisolated static func siteKey(bench: String, site: String) -> String { "\(bench)|\(site)" }
 
     // MARK: pins
 
@@ -170,6 +172,7 @@ final class OpenAsStore {
         }
 
         recordRecent(user, fullName: name, key: siteKey)
+        lastSwitchedKey = siteKey
         if keptTab != nil, await browser.replaceFrontTab(with: link) { return nil }
         browser.open(link)
         return nil
