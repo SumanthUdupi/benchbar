@@ -131,6 +131,21 @@ Left click opens the flyout, one row per bench:
   how to get it;
 - **Doctor**: the checks of `benchbar doctor` with their fix lines and a
   Copy button. It changes nothing.
+- **Open as…**: opens a site of the bench in your browser signed in as
+  another user, with no password. It needs a running bench and a site in
+  developer mode, and is greyed out otherwise. The menu holds **Switch Back
+  to {label}** (the user before the current one), your pinned users,
+  Administrator and **Find User…**; a bench with several developer-mode
+  sites has a submenu per site. The label is the pin's label, else the
+  user's full name, else the user id. Find User… opens a window that
+  searches the site's enabled users (as you type), opens the site as one,
+  and pins up to 9 users per site with a label of your own. Every switch
+  opens a new browser tab, and other open tabs of that site keep showing the
+  old user until you reload them. The tray reuses a session it made while
+  it is still alive; session ids are kept in memory only and are never
+  written to a file. See [`benchbar open`](reference/cli/other.md#open)
+  for what it changes on the site (last login, login hooks, older
+  sessions of that user ending).
 
 Esc closes the flyout, Enter on a row opens the site.
 
@@ -158,7 +173,8 @@ tray from waking a distro that WSL shut down after its idle time.
 
 The tray keeps its settings under a `tray` key in
 `%LOCALAPPDATA%\BenchBar\config.json`, the file `benchbar.exe` uses for
-the distro. Custom runners go in `%LOCALAPPDATA%\BenchBar\runners\<id>\`,
+the distro. Pinned "Open as…" users (user ids and your labels, never a
+session) are in `tray.open_as_pins`. Custom runners go in `%LOCALAPPDATA%\BenchBar\runners\<id>\`,
 in the format of [Custom runners](runners.md); the frames are scaled to
 the notification area's square slot.
 

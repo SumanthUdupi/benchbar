@@ -16,11 +16,14 @@ public partial class App : Application, ITrayHost
     private const string MutexName = @"Local\BenchBarTray";
     private const string OpenEventName = @"Local\BenchBarTray.Open";
     private const string HelpUrl = "https://benchbar.akashmishra.com/windows/";
+    private const string DistroStoppedMessage = "The WSL distro is stopped. Start it from the BenchBar flyout first.";
+    private static readonly TimeSpan SessionCheckTimeout = TimeSpan.FromSeconds(2);
 
     private readonly ErrorLog _log = new();
     private readonly StartupShortcut _startup = new();
     private readonly Dictionary<string, LogsWindow> _logs = [];
     private readonly Dictionary<string, DoctorWindow> _doctors = [];
+    private readonly Dictionary<string, FindUserWindow> _findUsers = [];
     private Mutex? _mutex;
     private EventWaitHandle? _openEvent;
     private RegisteredWaitHandle? _openWait;
@@ -32,6 +35,8 @@ public partial class App : Application, ITrayHost
     private TrayMenu? _menu;
     private IBenchSource? _source;
     private IDistroProbe? _probe;
+    private HttpClient? _openAsHttp;
+    private OpenAsService? _openAsService;
     private static readonly TimeSpan FlyoutKeepAlive = TimeSpan.FromSeconds(30);
     private readonly System.Windows.Threading.DispatcherTimer _releaseFlyout = new(System.Windows.Threading.DispatcherPriority.Background) { Interval = FlyoutKeepAlive };
     private long _flyoutHiddenAt;
@@ -253,7 +258,98 @@ public partial class App : Application, ITrayHost
         StartDistro = () => _controller!.StartDistro(),
         CopyText = CopyText,
         OpenUrl = OpenUrl,
+        OpenAsItems = OpenAsItemsFor,
+        OpenAsLabel = (bench, site) => OpenAsSvc?.CurrentLabel(bench.Path, site, _config.PinsFor(bench.Path, site)),
+        OpenAs = SwitchUserAsync,
+        FindUser = ShowFindUser,
     };
+
+    // --- Open as ---
+
+    /// <summary>Created on first use. Cookies are off: the session check sends its own <c>Cookie</c> header and must not keep what the site sets.</summary>
+    private OpenAsService? OpenAsSvc
+    {
+        get
+        {
+            if (_openAsService is null && _source is not null)
+            {
+                var http = _openAsHttp = new HttpClient(new HttpClientHandler { UseCookies = false, UseProxy = false });
+                _openAsService = new OpenAsService(
+                    _source,
+                    (baseUrl, sid, ct) => OpenAsService.CheckSessionAsync(http, baseUrl, sid, SessionCheckTimeout, ct),
+                    TimeProvider.System);
+            }
+            return _openAsService;
+        }
+    }
+
+    private IReadOnlyList<OpenAsItem> OpenAsItemsFor(BenchStatus bench, string site)
+    {
+        var pins = _config.PinsFor(bench.Path, site);
+        var service = OpenAsSvc;
+        return OpenAsMenuModel.Items(
+            pins,
+            service?.PreviousUser(bench.Path, site),
+            user => service?.LabelFor(bench.Path, site, user, pins) ?? user);
+    }
+
+    /// <summary>
+    /// Opens the site in the browser as <paramref name="user"/>. The error line, or null. The shim is never called while the
+    /// distro is stopped: that would boot it (the tray does not start it on its own).
+    /// </summary>
+    private async Task<string?> SwitchUserAsync(BenchStatus bench, string site, string user)
+    {
+        if (OpenAsSvc is not { } service) return "BenchBar is not ready.";
+        if (_controller?.Snapshot.DistroStopped == true) return DistroStoppedMessage;
+        var (url, error) = await service.SwitchAsync(bench, site, user, null, CancellationToken.None);
+        if (url is null) return error ?? "The site could not be opened.";
+        // ShellExecute with the URL as one string: it holds `&`, which `cmd /c start` would split on
+        OpenUrl(url.AbsoluteUri);
+        return null;
+    }
+
+    private Task<(UserList? Users, string? Error)> FindUsersAsync(BenchStatus bench, string site, string? text, CancellationToken ct)
+    {
+        if (OpenAsSvc is not { } service) return Task.FromResult<(UserList?, string?)>((null, "BenchBar is not ready."));
+        if (_controller?.Snapshot.DistroStopped == true) return Task.FromResult<(UserList?, string?)>((null, DistroStoppedMessage));
+        return service.FindUsersAsync(bench, site, text, ct);
+    }
+
+    private void ShowFindUser(BenchStatus bench, string site)
+    {
+        var key = TrayConfig.PinKey(bench.Path, site);
+        if (_findUsers.TryGetValue(key, out var existing))
+        {
+            existing.Activate();
+            return;
+        }
+        var actions = new FindUserActions
+        {
+            Find = (text, ct) => FindUsersAsync(bench, site, text, ct),
+            Open = user => SwitchUserAsync(bench, site, user),
+            Pins = () => _config.PinsFor(bench.Path, site),
+            Pin = (user, label) =>
+            {
+                var pinned = _config.TryPin(bench.Path, site, user, label);
+                if (pinned) SaveConfig();
+                return pinned;
+            },
+            Unpin = user =>
+            {
+                _config.Unpin(bench.Path, site, user);
+                SaveConfig();
+            },
+        };
+        var window = new FindUserWindow(site, actions, Theme);
+        _findUsers[key] = window;
+        window.Closed += (_, _) =>
+        {
+            _findUsers.Remove(key);
+            Awake(false);
+        };
+        Awake(true);
+        window.Show();
+    }
 
     private VsCodeOutcome OpenVsCode(BenchStatus bench)
     {
@@ -477,6 +573,8 @@ public partial class App : Application, ITrayHost
         _flyout?.Close();
         foreach (var w in _logs.Values.ToList()) w.Close();
         foreach (var w in _doctors.Values.ToList()) w.Close();
+        foreach (var w in _findUsers.Values.ToList()) w.Close();
+        _openAsHttp?.Dispose();
         _icon?.Dispose(); // NIM_DELETE
         _link?.Dispose(); // sends bye
         Shutdown();

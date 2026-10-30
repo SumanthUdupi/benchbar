@@ -48,7 +48,7 @@ public class FlyoutViewTests
         Assert.Equal(["running", "port conflict", "unknown (not_adopted)"], view.Rows.Select(r => r.StateText));
         Assert.Equal(["linuxdev.localhost", "v16dev.localhost", "no site"], view.Rows.Select(r => r.SiteText));
 
-        string[] strip = ["⋯", "Open site", "Logs", "VS Code", "Doctor"];
+        string[] strip = ["⋯", "Open site", "Open as…", "Logs", "VS Code", "Doctor"];
         Assert.Equal(["Stop", .. strip], view.Rows[0].ButtonLabels);
         Assert.Equal(["Start", .. strip], view.Rows[1].ButtonLabels);
         Assert.Equal(["Start", .. strip], view.Rows[2].ButtonLabels);
@@ -180,5 +180,130 @@ public class FlyoutViewTests
         Assert.Same(first, view.Rows[0]);
         view.SetSnapshot(new TraySnapshot([Status("b", "stopped")]), "none up");
         Assert.NotSame(first, view.Rows[0]);
+    });
+
+    private static BenchStatus Dev(string name, string state, params (string Site, bool DeveloperMode)[] sites)
+    {
+        var list = string.Join(",", sites.Select((s, i) =>
+            "{\"name\":\"" + s.Site + "\",\"default\":" + (i == 0 ? "true" : "false") + ",\"developer_mode\":" + (s.DeveloperMode ? "true" : "false") + "}"));
+        return BenchJson.ParseStatus(
+            "{\"bench\":\"/home/a/" + name + "\",\"name\":\"" + name + "\",\"site\":\"" + sites[0].Site + "\",\"state\":\"" + state + "\"," +
+            "\"web_url\":\"http://" + sites[0].Site + ":8000\",\"sites\":[" + list + "]}");
+    }
+
+    private static Button OpenAsButton(BenchRow row) => row.Buttons.Single(b => b.Content as string == "Open as…");
+
+    private static IReadOnlyList<string> Headers(ItemsControl menu) =>
+        menu.Items.Cast<object>().Select(i => i is MenuItem m ? (string)m.Header : "-").ToList();
+
+    private static void Click(MenuItem item) => item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+
+    [Fact]
+    public void OpenAsIsEnabledOnlyForARunningBenchWithADeveloperModeSite() => Sta.Run(() =>
+    {
+        var view = new FlyoutView(new FlyoutActions());
+        view.SetSnapshot(new TraySnapshot([
+            Dev("running-dev", "running", ("a.localhost", true)),
+            Dev("stopped-dev", "stopped", ("a.localhost", true)),
+            Dev("running-prod", "running", ("a.localhost", false)),
+            Status("old-cli", "running"),
+        ]), "1 of 4 up");
+
+        Assert.Equal([true, false, false, false], view.Rows.Select(r => OpenAsButton(r).IsEnabled));
+        Assert.Equal("Start the bench to open a site as another user", OpenAsButton(view.Rows[1]).ToolTip);
+        Assert.Equal("No site of this bench is in developer mode", OpenAsButton(view.Rows[2]).ToolTip);
+    });
+
+    [Fact]
+    public void WithTheDistroStoppedThereAreNoRowsAndSoNoOpenAsButton() => Sta.Run(() =>
+    {
+        var view = new FlyoutView(new FlyoutActions());
+        view.SetSnapshot(new TraySnapshot([Dev("b", "running", ("a.localhost", true))], DistroStopped: true, Distro: "Ubuntu"), "distro stopped");
+        Assert.Empty(view.Rows);
+    });
+
+    [Fact]
+    public void OneDeveloperModeSiteShowsItsItemsDirectly() => Sta.Run(() =>
+    {
+        var view = new FlyoutView(new FlyoutActions());
+        var bench = Dev("b", "running", ("a.localhost", true), ("b.localhost", false));
+        var menu = view.BuildOpenAsMenu(bench, bench.Sites.Where(s => s.DeveloperMode).ToList());
+        Assert.Equal(["Administrator", "-", "Find User…"], Headers(menu));
+    });
+
+    [Fact]
+    public void SeveralDeveloperModeSitesGiveASubmenuEach() => Sta.Run(() =>
+    {
+        var view = new FlyoutView(new FlyoutActions());
+        var bench = Dev("b", "running", ("a.localhost", true), ("b.localhost", true), ("c.localhost", false));
+        var menu = view.BuildOpenAsMenu(bench, bench.Sites.Where(s => s.DeveloperMode).ToList());
+        Assert.Equal(["a.localhost", "b.localhost"], Headers(menu));
+        Assert.Equal(["Administrator", "-", "Find User…"], Headers((MenuItem)menu.Items[1]));
+    });
+
+    [Fact]
+    public void AnItemOpensTheSitesOwnSiteAsThatUserAndFindUserOpensTheWindowForIt() => Sta.Run(() =>
+    {
+        var calls = new List<string>();
+        var view = new FlyoutView(new FlyoutActions
+        {
+            OpenAsItems = (_, site) => OpenAsMenuModel.Items([new PinnedUser("priya@x.com", "NE")], "rahul@x.com", u => u == "priya@x.com" ? "NE" : "Rahul"),
+            OpenAs = (b, site, user) => { calls.Add($"{b.Name} {site} {user}"); return Task.FromResult<string?>(null); },
+            FindUser = (b, site) => calls.Add($"find {b.Name} {site}"),
+        });
+        var bench = Dev("b", "running", ("a.localhost", true), ("b.localhost", true));
+        var menu = view.BuildOpenAsMenu(bench, bench.Sites);
+
+        var second = (MenuItem)menu.Items[1];
+        Assert.Equal(["Switch Back to Rahul", "-", "NE — priya@x.com", "Administrator", "-", "Find User…"], Headers(second));
+        Click((MenuItem)second.Items[0]);
+        Click((MenuItem)second.Items[2]);
+        Click((MenuItem)second.Items[5]);
+        Assert.Equal(["b b.localhost rahul@x.com", "b b.localhost priya@x.com", "find b b.localhost"], calls);
+    });
+
+    [Fact]
+    public void ARefusalShowsUnderTheRowAndAUserIdKeepsItsUnderscore() => Sta.Run(() =>
+    {
+        var view = new FlyoutView(new FlyoutActions
+        {
+            OpenAsItems = (_, _) => OpenAsMenuModel.Items([new PinnedUser("a_b@x.com", null)], null, u => u),
+            OpenAs = (_, _, _) => Task.FromResult<string?>("a_b@x.com is disabled on a.localhost."),
+        });
+        var bench = Dev("b", "running", ("a.localhost", true));
+        view.SetSnapshot(new TraySnapshot([bench]), "1 of 1 up");
+
+        var menu = view.BuildOpenAsMenu(view.Rows[0].Bench, view.Rows[0].Bench.Sites);
+        Assert.Equal("a__b@x.com", Headers(menu)[0]);
+        Click((MenuItem)menu.Items[0]);
+
+        Assert.Equal("a_b@x.com is disabled on a.localhost.", view.Rows[0].FailureText);
+        Assert.True(OpenAsButton(view.Rows[0]).IsEnabled);
+    });
+
+    [Fact]
+    public void ARowRebuildsWhenWhoTheSiteWasOpenedAsChanges() => Sta.Run(() =>
+    {
+        string? label = null;
+        var view = new FlyoutView(new FlyoutActions { OpenAsLabel = (_, _) => label });
+        var snapshot = new TraySnapshot([Dev("b", "running", ("a.localhost", true))]);
+        view.SetSnapshot(snapshot, "1 of 1 up");
+        var first = view.Rows[0];
+        view.SetSnapshot(snapshot, "1 of 1 up");
+        Assert.Same(first, view.Rows[0]);
+
+        label = "NE";
+        view.SetSnapshot(snapshot, "1 of 1 up");
+        Assert.NotSame(first, view.Rows[0]);
+    });
+
+    [Fact]
+    public void ARowRebuildsWhenASiteTurnsDeveloperModeOn() => Sta.Run(() =>
+    {
+        var view = new FlyoutView(new FlyoutActions());
+        view.SetSnapshot(new TraySnapshot([Dev("b", "running", ("a.localhost", false))]), "1 of 1 up");
+        Assert.False(OpenAsButton(view.Rows[0]).IsEnabled);
+        view.SetSnapshot(new TraySnapshot([Dev("b", "running", ("a.localhost", true))]), "1 of 1 up");
+        Assert.True(OpenAsButton(view.Rows[0]).IsEnabled);
     });
 }
