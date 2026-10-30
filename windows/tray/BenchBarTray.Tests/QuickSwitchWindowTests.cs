@@ -47,7 +47,7 @@ public class QuickSwitchWindowTests
     {
         var calls = new List<(string Site, string User)>();
         var release = new TaskCompletionSource<string?>();
-        var actions = new QuickSwitchActions { Switch = (site, user) => { calls.Add((site, user)); return release.Task; } };
+        var actions = new QuickSwitchActions { Switch = (site, user, _) => { calls.Add((site, user)); return release.Task; } };
         var window = Window(Ready("a.localhost"), Data(["ne@x.com"], previous: "zed@x.com"), actions);
 
         window.HandleKey(Key.Enter, shift: false);
@@ -59,10 +59,105 @@ public class QuickSwitchWindowTests
     public void ADigitSwitchesAtOnceWhileTheBoxIsEmpty() => Sta.Run(() =>
     {
         var calls = new List<string>();
-        var actions = new QuickSwitchActions { Switch = (_, user) => { calls.Add(user); return Task.FromResult<string?>(null); } };
+        var actions = new QuickSwitchActions { Switch = (_, user, _) => { calls.Add(user); return Task.FromResult<string?>(null); } };
         var window = Window(Ready("a.localhost"), Data(["ne@x.com", "pm@x.com"]), actions);
         Assert.True(window.HandleKey(Key.D2, shift: false));
         Assert.Equal(["pm@x.com"], calls);
+    });
+
+    [Fact]
+    public void DigitsKeepTheirPinsWhenSwitchBackShowsAndAdministratorIsZero() => Sta.Run(() =>
+    {
+        var calls = new List<string>();
+        var actions = new QuickSwitchActions { Switch = (_, user, _) => { calls.Add(user); return new TaskCompletionSource<string?>().Task; } };
+        var window = Window(Ready("a.localhost"), Data(["ne@x.com", "pm@x.com"], previous: "zed@x.com"), actions);
+
+        Assert.True(window.HandleKey(Key.D1, shift: false)); // the first pin, not Switch Back
+        Assert.Equal(["ne@x.com"], calls);
+    });
+
+    [Fact]
+    public void ZeroSwitchesToAdministrator() => Sta.Run(() =>
+    {
+        var calls = new List<string>();
+        var actions = new QuickSwitchActions { Switch = (_, user, _) => { calls.Add(user); return new TaskCompletionSource<string?>().Task; } };
+        var window = Window(Ready("a.localhost"), Data(["ne@x.com"], previous: "zed@x.com"), actions);
+        Assert.True(window.HandleKey(Key.D0, shift: false));
+        Assert.Equal(["Administrator"], calls);
+    });
+
+    [Fact]
+    public void ABlankBoxStillTakesDigitsAndARealQueryDoesNot() => Sta.Run(() =>
+    {
+        var calls = new List<string>();
+        var actions = new QuickSwitchActions { Switch = (_, user, _) => { calls.Add(user); return new TaskCompletionSource<string?>().Task; } };
+        var window = Window(Ready("a.localhost"), Data(["ne@x.com"]), actions);
+
+        window.SetSearchText("ne");
+        Assert.False(window.HandleKey(Key.D1, shift: false));
+        Assert.Empty(calls);
+
+        window.SetSearchText("   ");
+        Assert.True(window.HandleKey(Key.D1, shift: false));
+        Assert.Equal(["ne@x.com"], calls);
+    });
+
+    [Fact]
+    public void ALetterTypedWhileAltIsStillDownLandsInTheBox() => Sta.Run(() =>
+    {
+        var window = Window(Ready("a.localhost"), Data(["ne@x.com"]));
+        Assert.True(window.HandleAltLetter(Key.N, shift: false));
+        Assert.True(window.HandleAltLetter(Key.E, shift: true));
+        Assert.Equal("nE", window.SearchText);
+        Assert.False(window.HandleAltLetter(Key.F5, shift: false));
+        Assert.False(window.HandleAltLetter(Key.D1, shift: false));
+        Assert.Equal('q', QuickSwitchWindow.LetterOf(Key.Q, false));
+        Assert.Equal('Z', QuickSwitchWindow.LetterOf(Key.Z, true));
+        Assert.Null(QuickSwitchWindow.LetterOf(Key.Space, false));
+    });
+
+    [Fact]
+    public void AFailedSwitchWhileThePanelIsNotInFrontIsReportedNotDropped() => Sta.Run(() =>
+    {
+        var reported = new List<string>();
+        var actions = new QuickSwitchActions
+        {
+            Switch = (_, _, _) => Task.FromResult<string?>("ne@x.com is disabled on a.localhost."),
+            ReportFailure = reported.Add,
+        };
+        var window = Window(Ready("a.localhost"), Data(["ne@x.com"]), actions); // never shown, so never active
+        window.HandleKey(Key.Enter, shift: false);
+        Assert.Equal(["ne@x.com is disabled on a.localhost."], reported);
+    });
+
+    [Fact]
+    public void ClosingThePanelMidSwitchCancelsTheSwitch() => Sta.Run(() =>
+    {
+        CancellationToken seen = default;
+        var actions = new QuickSwitchActions { Switch = (_, _, ct) => { seen = ct; return new TaskCompletionSource<string?>().Task; } };
+        var window = Window(Ready("a.localhost"), Data(["ne@x.com"]), actions);
+
+        window.HandleKey(Key.Enter, shift: false);
+        Assert.False(seen.IsCancellationRequested);
+        Assert.True(window.HandleKey(Key.Escape, shift: false));
+        Assert.True(seen.IsCancellationRequested);
+    });
+
+    [Fact]
+    public void EveryStateOfTheTargetShowsItsOwnLineAndNoSearchBox() => Sta.Run(() =>
+    {
+        var cases = new (TraySnapshot Snapshot, string Text)[]
+        {
+            (TraySnapshot.Empty, "Loading…"),
+            (new TraySnapshot([], Problem: "benchbar.exe was not found."), "benchbar.exe was not found."),
+            (new TraySnapshot([new BenchStatus("b", "/b", BenchState.Starting, null, null, "a") { Sites = [new SiteInfo("a", true, true)] }]), "b is starting."),
+        };
+        foreach (var (snapshot, text) in cases)
+        {
+            var window = Window(QuickSwitchModel.Choose(snapshot, null), QuickSwitchData.Empty);
+            Assert.Equal(text, window.MessageText);
+            Assert.False(window.SearchBoxVisible);
+        }
     });
 
     [Fact]
@@ -128,7 +223,7 @@ public class QuickSwitchWindowTests
     [Fact]
     public void AStoppedDistroShowsItsMessageWithNoRowsAndNoSearchBox() => Sta.Run(() =>
     {
-        var target = QuickSwitchModel.Choose([], distroStopped: true, null);
+        var target = QuickSwitchModel.Choose(new TraySnapshot([], DistroStopped: true, Distro: "Ubuntu"), null);
         var window = Window(target, QuickSwitchData.Empty);
         Assert.StartsWith("The WSL distro is stopped", window.MessageText);
         Assert.Empty(window.RowTexts);

@@ -67,12 +67,12 @@ public class TrayMenuTests : IDisposable
 
         taken = true;
         menu.RefreshChecks();
-        Assert.False(item.IsChecked); // on in the settings, but the key is not ours
+        Assert.True(item.IsChecked); // the setting is on, so one click turns it off
         Assert.Equal("Quick Switch: Ctrl+Alt+U is used by another app", item.Header);
 
-        item.IsChecked = true;
+        item.IsChecked = false; // what a click on a checked item does first
         item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
-        Assert.Equal([true], seen);
+        Assert.Equal([false], seen);
     });
 
     [Fact]

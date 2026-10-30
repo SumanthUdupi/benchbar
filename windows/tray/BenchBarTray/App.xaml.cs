@@ -16,7 +16,7 @@ public partial class App : Application, ITrayHost
     private const string MutexName = @"Local\BenchBarTray";
     private const string OpenEventName = @"Local\BenchBarTray.Open";
     private const string HelpUrl = "https://benchbar.akashmishra.com/windows/";
-    private const string DistroStoppedMessage = "The WSL distro is stopped. Start it from the BenchBar flyout first.";
+    private const string BrowserFailedMessage = "Could not open your browser. Check that Windows has a default browser, then try again.";
     private static readonly TimeSpan SessionCheckTimeout = TimeSpan.FromSeconds(2);
 
     private readonly ErrorLog _log = new();
@@ -262,10 +262,10 @@ public partial class App : Application, ITrayHost
         VsCodeAvailable = () => VsCode.Find() is not null,
         StartDistro = () => _controller!.StartDistro(),
         CopyText = CopyText,
-        OpenUrl = OpenUrl,
+        OpenUrl = url => OpenUrl(url),
         OpenAsItems = OpenAsItemsFor,
         OpenAsLabel = (bench, site) => OpenAsSvc?.CurrentLabel(bench.Path, site, _config.PinsFor(bench.Path, site)),
-        OpenAs = SwitchUserAsync,
+        OpenAs = (bench, site, user) => SwitchUserAsync(bench, site, user, CancellationToken.None),
         FindUser = ShowFindUser,
     };
 
@@ -299,29 +299,41 @@ public partial class App : Application, ITrayHost
     }
 
     /// <summary>
-    /// Opens the site in the browser as <paramref name="user"/>. The error line, or null. The shim is never called while the
-    /// distro is stopped: that would boot it (the tray does not start it on its own).
+    /// The line to show instead of calling the shim, or null when the distro runs. Asked of WSL now, not read from the
+    /// snapshot (up to 5 minutes old, and WSL idles a distro out): the shim would boot a stopped one.
     /// </summary>
-    private async Task<string?> SwitchUserAsync(BenchStatus bench, string site, string user)
+    private async Task<string?> DistroProblemAsync(CancellationToken ct)
+    {
+        if (_probe is null) return _controller?.Snapshot.DistroStopped == true ? DistroGuard.StoppedMessage : null;
+        return await DistroGuard.CheckAsync(_probe, DistroName.Resolve(_config.Distro), ct);
+    }
+
+    /// <summary>
+    /// Opens the site in the browser as <paramref name="user"/>. The error line, or null. Cancelling <paramref name="ct"/>
+    /// throws and opens nothing. The user counts as "current" only once the browser launch succeeded.
+    /// </summary>
+    private async Task<string?> SwitchUserAsync(BenchStatus bench, string site, string user, CancellationToken ct)
     {
         if (OpenAsSvc is not { } service) return "BenchBar is not ready.";
-        if (_controller?.Snapshot.DistroStopped == true) return DistroStoppedMessage;
-        var (url, error) = await service.SwitchAsync(bench, site, user, null, CancellationToken.None);
+        if (await DistroProblemAsync(ct) is { } distroProblem) return distroProblem;
+        var (url, error) = await service.SwitchAsync(bench, site, user, null, ct);
         if (url is null) return error ?? "The site could not be opened.";
+        ct.ThrowIfCancellationRequested();
         // ShellExecute with the URL as one string: it holds `&`, which `cmd /c start` would split on
-        OpenUrl(url.AbsoluteUri);
+        if (!OpenUrl(url.AbsoluteUri)) return BrowserFailedMessage;
+        service.MarkOpened(bench.Path, site, user);
         // a switch from Find User leaves a warm flyout showing the previous "as {label}" until the next poll
         if (_controller is { } controller)
             _flyout?.View.SetSnapshot(controller.Snapshot, TrayController.UpText(controller.Snapshot, controller.Benches.Select(b => b.State).ToList()));
         return null;
     }
 
-    private Task<(UserList? Users, string? Error)> FindUsersAsync(
+    private async Task<(UserList? Users, string? Error)> FindUsersAsync(
         BenchStatus bench, string site, string? text, CancellationToken ct, int limit = OpenAsService.UserListLimit)
     {
-        if (OpenAsSvc is not { } service) return Task.FromResult<(UserList?, string?)>((null, "BenchBar is not ready."));
-        if (_controller?.Snapshot.DistroStopped == true) return Task.FromResult<(UserList?, string?)>((null, DistroStoppedMessage));
-        return service.FindUsersAsync(bench, site, text, ct, limit);
+        if (OpenAsSvc is not { } service) return (null, "BenchBar is not ready.");
+        if (await DistroProblemAsync(ct) is { } distroProblem) return (null, distroProblem);
+        return await service.FindUsersAsync(bench, site, text, ct, limit);
     }
 
     private void ShowFindUser(BenchStatus bench, string site)
@@ -335,18 +347,16 @@ public partial class App : Application, ITrayHost
         var actions = new FindUserActions
         {
             Find = (text, ct) => FindUsersAsync(bench, site, text, ct),
-            Open = user => SwitchUserAsync(bench, site, user),
+            Open = user => SwitchUserAsync(bench, site, user, CancellationToken.None),
             Pins = () => _config.PinsFor(bench.Path, site),
             Pin = (user, label) =>
-            {
-                var pinned = _config.TryPin(bench.Path, site, user, label);
-                if (pinned) SaveConfig();
-                return pinned;
-            },
+                !_config.TryPin(bench.Path, site, user, label) ? PinOutcome.NoRoom
+                : SaveConfig() ? PinOutcome.Saved
+                : PinOutcome.NotSaved,
             Unpin = user =>
             {
                 _config.Unpin(bench.Path, site, user);
-                SaveConfig();
+                return SaveConfig();
             },
         };
         var window = new FindUserWindow(site, actions, Theme);
@@ -363,8 +373,8 @@ public partial class App : Application, ITrayHost
     // --- Quick Switch ---
 
     /// <summary>
-    /// Registers Ctrl+Alt+U when the setting is on and drops it when off. A key another app owns leaves the feature off with
-    /// a note in the menu; the next toggle of the setting tries again.
+    /// Registers Ctrl+Alt+U when the setting is on and drops it when off. A key another app owns leaves the feature inactive
+    /// with a note in the menu (the item stays checked); one click turns the setting off, the next turning it on tries again.
     /// </summary>
     private void ApplyQuickSwitch()
     {
@@ -406,8 +416,7 @@ public partial class App : Application, ITrayHost
             _quickSwitch.Close();
             return;
         }
-        var snapshot = _controller.Snapshot;
-        var target = QuickSwitchModel.Choose(snapshot.Benches, snapshot.DistroStopped, _lastQuickSwitch);
+        var target = QuickSwitchModel.Choose(_controller.Snapshot, _lastQuickSwitch);
         var service = OpenAsSvc;
         var data = QuickSwitchData.Empty;
         QuickSwitchActions actions = new();
@@ -422,12 +431,13 @@ public partial class App : Application, ITrayHost
             actions = new QuickSwitchActions
             {
                 Find = (site, text, ct) => FindUsersAsync(bench, site, text, ct, QuickSwitchModel.SearchLimit),
-                Switch = async (site, user) =>
+                Switch = async (site, user, ct) =>
                 {
-                    var error = await SwitchUserAsync(bench, site, user);
+                    var error = await SwitchUserAsync(bench, site, user, ct);
                     if (error is null) _lastQuickSwitch = (bench.Path, site);
                     return error;
                 },
+                ReportFailure = message => ShowToast(new Toast("Open as failed", message, bench.Path, AlertKind.None)),
             };
         }
         else if (target.State == QuickSwitchState.Ready)
@@ -578,12 +588,17 @@ public partial class App : Application, ITrayHost
             _ => ThemeMode.System,
         };
 
-    private void SaveConfig()
+    private bool SaveConfig()
     {
-        try { _config.Save(); }
+        try
+        {
+            _config.Save();
+            return true;
+        }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _log.Write("config", ex);
+            return false;
         }
     }
 
@@ -662,10 +677,18 @@ public partial class App : Application, ITrayHost
         catch (System.Runtime.InteropServices.COMException ex) { _log.Write("clipboard", ex); }
     }
 
-    private static void OpenUrl(string url)
+    /// <summary>False when Windows could not launch the URL (no default browser).</summary>
+    private static bool OpenUrl(string url)
     {
-        try { Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose(); }
-        catch (System.ComponentModel.Win32Exception) { }
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
     }
 
     private void Quit()

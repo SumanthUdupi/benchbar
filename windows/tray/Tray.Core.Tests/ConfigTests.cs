@@ -125,6 +125,29 @@ public class ConfigTests : IDisposable
     }
 
     [Fact]
+    public void PinsAreMatchedWithoutRegardToCaseLikeFrappeUserIds()
+    {
+        var config = TrayConfig.Load(ConfigPath);
+        Assert.True(config.TryPin("/b", "s", "ne@x.com", "NE"));
+        Assert.True(config.TryPin("/b", "s", "NE@x.com", "Nina")); // a relabel, not a second pin
+        var pins = config.PinsFor("/b", "s");
+        Assert.Equal("Nina", Assert.Single(pins).Label);
+
+        config.Unpin("/b", "s", "Ne@X.com");
+        Assert.Empty(config.PinsFor("/b", "s"));
+        Assert.True(TrayConfig.SameUser("A@x.com", "a@X.com"));
+        Assert.False(TrayConfig.SameUser("a@x.com", "b@x.com"));
+    }
+
+    [Fact]
+    public void LoadDropsAPinThatRepeatsAnEarlierOneInAnotherCase()
+    {
+        Write("""{"tray":{"open_as_pins":{"/b|s":[{"user":"a@x.com","label":"A"},{"user":"A@X.com"}]}}}""");
+        var pins = TrayConfig.Load(ConfigPath).PinsFor("/b", "s");
+        Assert.Equal("A", Assert.Single(pins).Label);
+    }
+
+    [Fact]
     public void LoadIgnoresMalformedPinsAndCapsAtNine()
     {
         var many = string.Join(",", Enumerable.Range(0, 12).Select(i => "{\"user\":\"u" + i + "@x.com\"}"));

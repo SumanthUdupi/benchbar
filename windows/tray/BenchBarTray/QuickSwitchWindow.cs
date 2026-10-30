@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using BenchBar.Tray.Core;
@@ -15,8 +16,14 @@ internal sealed class QuickSwitchActions
     public Func<string, string, CancellationToken, Task<(UserList? Users, string? Error)>> Find { get; set; } =
         (_, _, _) => Task.FromResult<(UserList?, string?)>((new UserList("", [], false), null));
 
-    /// <summary>Opens the site as the user; the error line, or null when it opened.</summary>
-    public Func<string, string, Task<string?>> Switch { get; set; } = (_, _) => Task.FromResult<string?>(null);
+    /// <summary>
+    /// Opens the site as the user; the error line, or null when it opened. The token is cancelled when the panel closes
+    /// mid switch: the switch must stop, and no browser may open for it later.
+    /// </summary>
+    public Func<string, string, CancellationToken, Task<string?>> Switch { get; set; } = (_, _, _) => Task.FromResult<string?>(null);
+
+    /// <summary>Shows a failed switch somewhere the user will see it when the panel is no longer in front (a toast).</summary>
+    public Action<string> ReportFailure { get; set; } = _ => { };
 }
 
 /// <summary>
@@ -35,6 +42,9 @@ internal sealed class QuickSwitchWindow : Window
     private const double RowHeight = 34;
     private const double ChromeHeight = 110;
 
+    /// <summary>The work area of a monitor in physical pixels, and its DPI.</summary>
+    private readonly record struct MonitorArea(int Left, int Top, int Right, int Bottom, uint Dpi);
+
     private readonly QuickSwitchTarget _target;
     private readonly QuickSwitchModel? _model;
     private readonly QuickSwitchActions _actions;
@@ -48,6 +58,8 @@ internal sealed class QuickSwitchWindow : Window
     };
     private readonly List<string> _rowTexts = [];
     private CancellationTokenSource? _searchCts;
+    private CancellationTokenSource? _switchCts;
+    private MonitorArea? _monitor;
     private string? _error;
     private bool _busy;
     private bool _searching;
@@ -78,6 +90,9 @@ internal sealed class QuickSwitchWindow : Window
             _ = SearchAsync();
         };
         PreviewKeyDown += OnKey;
+        PreviewKeyUp += OnKeyUp;
+        SourceInitialized += (_, _) => Place(measured: false);
+        ContentRendered += (_, _) => Place(measured: true);
         Deactivated += (_, _) =>
         {
             if (!_busy) Close();
@@ -87,12 +102,9 @@ internal sealed class QuickSwitchWindow : Window
             _closed = true;
             _debounce.Stop();
             _searchCts?.Cancel();
+            _switchCts?.Cancel();
         };
-        Loaded += (_, _) =>
-        {
-            Activate();
-            _search.Focus();
-        };
+        Loaded += (_, _) => TakeKeyboard();
 
         var root = new DockPanel();
         DockPanel.SetDock(_title, Dock.Top);
@@ -127,28 +139,56 @@ internal sealed class QuickSwitchWindow : Window
     /// <summary>Shows the panel centred on the monitor under the cursor and takes the keyboard.</summary>
     public void ShowCentered()
     {
+        _monitor = MonitorUnderCursor();
+        if (_monitor is null) WindowStartupLocation = WindowStartupLocation.CenterScreen;
+        Show();
+        TakeKeyboard();
+    }
+
+    private static MonitorArea? MonitorUnderCursor()
+    {
         var point = NativeMethods.GetCursorPos(out var cursor) ? cursor : default;
         var monitor = NativeMethods.MonitorFromPoint(point, NativeMethods.MonitorDefaultToNearest);
         var info = new NativeMethods.MonitorInfo { Size = Marshal.SizeOf<NativeMethods.MonitorInfo>() };
         var known = monitor != IntPtr.Zero && NativeMethods.GetMonitorInfo(monitor, ref info)
                     && info.Work.Right > info.Work.Left && info.Work.Bottom > info.Work.Top;
-        if (known)
+        if (!known) return null;
+        uint dpi = 96;
+        if (NativeMethods.GetDpiForMonitor(monitor, NativeMethods.MdtEffectiveDpi, out var dpiX, out _) == 0 && dpiX > 0) dpi = dpiX;
+        return new MonitorArea(info.Work.Left, info.Work.Top, info.Work.Right, info.Work.Bottom, dpi);
+    }
+
+    /// <summary>
+    /// Centres the panel on its monitor with SetWindowPos in physical pixels, once the window exists (WPF's Left and Top are
+    /// in the units of whichever monitor it started on, so on mixed DPI they land off centre). The first call uses the
+    /// height the rows should need; the second, after layout, the real one. The top stays where it is when results grow the panel.
+    /// </summary>
+    private void Place(bool measured)
+    {
+        if (_monitor is not { } area) return;
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero) return;
+        int width, height;
+        if (measured && NativeMethods.GetWindowRect(hwnd, out var rect))
         {
-            uint dpi = 96;
-            if (NativeMethods.GetDpiForMonitor(monitor, NativeMethods.MdtEffectiveDpi, out var dpiX, out _) == 0 && dpiX > 0) dpi = dpiX;
-            var scale = dpi / 96.0;
-            var heightDip = Math.Min(PanelMaxHeight, ChromeHeight + RowHeight * Math.Max(1, _rowTexts.Count));
-            var workWidth = info.Work.Right - info.Work.Left;
-            var workHeight = info.Work.Bottom - info.Work.Top;
-            Left = (info.Work.Left + (workWidth - PanelWidth * scale) / 2) * 96.0 / dpi;
-            Top = (info.Work.Top + (workHeight - heightDip * scale) / 2) * 96.0 / dpi;
+            width = rect.Right - rect.Left;
+            height = rect.Bottom - rect.Top;
         }
         else
         {
-            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            width = PanelPlacement.ToPixels(PanelWidth, area.Dpi);
+            height = PanelPlacement.ToPixels(Math.Min(PanelMaxHeight, ChromeHeight + RowHeight * Math.Max(1, _rowTexts.Count)), area.Dpi);
         }
-        Show();
+        var (x, y) = PanelPlacement.Centre(area.Left, area.Top, area.Right, area.Bottom, width, height);
+        NativeMethods.SetWindowPos(hwnd, IntPtr.Zero, x, y, 0, 0, NativeMethods.SwpNoSize | NativeMethods.SwpNoZOrder | NativeMethods.SwpNoActivate);
+    }
+
+    /// <summary>Takes the foreground, by force when Windows refused the plain request, then the keyboard focus: else the keys go to the app below.</summary>
+    private void TakeKeyboard()
+    {
         Activate();
+        if (!IsActive) NativeMethods.ForceForeground(new WindowInteropHelper(this).Handle);
+        if (_search.Visibility == Visibility.Visible) Keyboard.Focus(_search);
     }
 
     /// <summary>Runs the search for the text in the box now; a newer search cancels the one still running.</summary>
@@ -191,6 +231,24 @@ internal sealed class QuickSwitchWindow : Window
     /// <summary>Types into the search box, as the keyboard would.</summary>
     internal void SetSearchText(string text) => _search.Text = text;
 
+    internal string SearchText => _search.Text;
+
+    /// <summary>
+    /// A letter typed while Alt is still down after the hotkey is a system key: WPF sends no text for it and the box would
+    /// lose it. It is put in the box here instead, by its key (so on a non-US layout it is the US key's letter).
+    /// </summary>
+    internal bool HandleAltLetter(Key key, bool shift)
+    {
+        if (_model is null || _busy || LetterOf(key, shift) is not { } letter) return false;
+        var at = _search.SelectionStart;
+        _search.Text = _search.Text.Remove(at, _search.SelectionLength).Insert(at, letter.ToString());
+        _search.CaretIndex = at + 1;
+        return true;
+    }
+
+    internal static char? LetterOf(Key key, bool shift) =>
+        key is >= Key.A and <= Key.Z ? (char)((shift ? 'A' : 'a') + (key - Key.A)) : null;
+
     /// <summary>The key handling, callable without a keyboard. Returns true when the key was used.</summary>
     internal bool HandleKey(Key key, bool shift)
     {
@@ -221,7 +279,7 @@ internal sealed class QuickSwitchWindow : Window
                 _ = ConfirmAsync(_model.Confirm());
                 return true;
         }
-        if (!shift && _search.Text.Length == 0 && DigitOf(key) is { } digit)
+        if (!shift && _model.DigitsActive && DigitOf(key) is { } digit)
         {
             _ = ConfirmAsync(_model.ConfirmDigit(digit));
             return true;
@@ -240,7 +298,15 @@ internal sealed class QuickSwitchWindow : Window
     {
         // Alt is usually still down right after Ctrl+Alt+U, which WPF reports as Key.System
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        if (HandleKey(key, (Keyboard.Modifiers & ModifierKeys.Shift) != 0)) e.Handled = true;
+        var shift = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+        var controlHeld = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        if (HandleKey(key, shift) || (e.Key == Key.System && !controlHeld && HandleAltLetter(key, shift))) e.Handled = true;
+    }
+
+    /// <summary>The lone Alt release right after the hotkey would open the window's system menu and eat the next keys.</summary>
+    private static void OnKeyUp(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.System && e.SystemKey is Key.LeftAlt or Key.RightAlt) e.Handled = true;
     }
 
     private async Task ConfirmAsync(QuickSwitchChoice? choice)
@@ -251,13 +317,19 @@ internal sealed class QuickSwitchWindow : Window
         _error = null;
         Render();
         string? error;
+        var switching = _switchCts = new CancellationTokenSource();
         try
         {
-            error = await _actions.Switch(choice.Site, choice.User);
+            error = await _actions.Switch(choice.Site, choice.User, switching.Token);
         }
         catch (Exception ex)
         {
             error = ex.Message;
+        }
+        finally
+        {
+            _switchCts = null;
+            switching.Dispose();
         }
         if (_closed) return;
         _busy = false;
@@ -271,6 +343,8 @@ internal sealed class QuickSwitchWindow : Window
         _error = error;
         if (!IsActive)
         {
+            // the user looked away during a slow switch: the panel goes, but the reason must not
+            _actions.ReportFailure(error);
             Close();
             return;
         }
@@ -310,12 +384,12 @@ internal sealed class QuickSwitchWindow : Window
         _title.Text = _model.Title;
         var rows = _model.Rows;
         var primary = _model.PrimaryCount;
-        var showDigits = _model.Query.Length == 0;
+        var showDigits = _model.DigitsActive;
         FrameworkElement? selected = null;
         for (var i = 0; i < rows.Count; i++)
         {
             if (i == primary) _list.Children.Add(Header(QuickSwitchModel.OtherUsersHeader));
-            var row = RowElement(rows[i], showDigits ? QuickSwitchModel.DigitLabel(i) : null, i == _model.Selected);
+            var row = RowElement(rows[i], showDigits ? _model.DigitLabel(i) : null, i == _model.Selected);
             if (i == _model.Selected) selected = row;
             _rowTexts.Add(rows[i].Text);
             _list.Children.Add(row);

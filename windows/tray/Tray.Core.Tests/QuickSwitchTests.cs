@@ -95,26 +95,56 @@ public class QuickSwitchTests
     }
 
     [Fact]
-    public void DigitsMapToRowsAndZeroIsTheTenth()
+    public void PinsKeepDigits1To9AndAdministratorIs0WhetherOrNotSwitchBackShows()
     {
         var pins = Enumerable.Range(1, 9).Select(i => $"u{i}@x.com").ToArray();
-        var model = Model(Data(pins, previous: "zed@x.com")); // Switch Back + 9 pins + Administrator = 11 rows
-        Assert.Equal("zed@x.com", model.RowForDigit(1)!.User);
-        Assert.Equal("u1@x.com", model.RowForDigit(2)!.User);
-        Assert.Equal("u8@x.com", model.RowForDigit(9)!.User);
-        Assert.Equal("u9@x.com", model.RowForDigit(0)!.User);
-        Assert.Equal("1", QuickSwitchModel.DigitLabel(0));
-        Assert.Equal("0", QuickSwitchModel.DigitLabel(9));
-        Assert.Null(QuickSwitchModel.DigitLabel(10));
+        foreach (var previous in new string?[] { null, "zed@x.com" })
+        {
+            var model = Model(Data(pins, previous: previous)); // 9 pins + Administrator, with or without Switch Back
+            for (var digit = 1; digit <= 9; digit++) Assert.Equal($"u{digit}@x.com", model.RowForDigit(digit)!.User);
+            Assert.Equal("Administrator", model.RowForDigit(0)!.User);
+            Assert.Equal(previous is null ? 10 : 11, model.Rows.Count);
+        }
     }
 
     [Fact]
-    public void ADigitPastTheLastRowDoesNothing()
+    public void SwitchBackAndSearchedUsersHaveNoDigit()
+    {
+        var model = Model(Data(["ne@x.com", "pm@x.com"], previous: "zed@x.com"));
+        Assert.Equal([null, "1", "2", "0"], Enumerable.Range(0, model.Rows.Count).Select(model.DigitLabel));
+        Assert.Null(model.DigitLabel(4));
+        Assert.Null(model.DigitLabel(-1));
+
+        model.SetQuery("x");
+        model.SetOthers([User("xavier@x.com")]);
+        Assert.Equal(QuickRowKind.Other, model.Rows[^1].Kind);
+        Assert.Null(model.DigitLabel(model.Rows.Count - 1));
+    }
+
+    [Fact]
+    public void ADigitWithNoRowDoesNothing()
     {
         var model = Model(Data()); // Administrator only
-        Assert.Null(model.RowForDigit(2));
-        Assert.Null(model.ConfirmDigit(2));
-        Assert.Equal("Administrator", model.ConfirmDigit(1)!.User);
+        Assert.Null(model.RowForDigit(1));
+        Assert.Null(model.ConfirmDigit(1));
+        Assert.Null(model.RowForDigit(5));
+        Assert.False(model.Busy);
+        Assert.Equal("Administrator", model.ConfirmDigit(0)!.User);
+    }
+
+    [Fact]
+    public void ABlankQueryIsNotAQueryDigitsStayActiveAndRowsStayUnfiltered()
+    {
+        var model = Model(Data(["ne@x.com"]));
+        model.SetQuery("   ");
+        Assert.True(model.DigitsActive);
+        Assert.Equal(2, model.Rows.Count);
+        Assert.Equal("ne@x.com", model.ConfirmDigit(1)!.User);
+
+        model.Rearm();
+        model.SetQuery(" a ");
+        Assert.False(model.DigitsActive);
+        Assert.Null(model.ConfirmDigit(1));
     }
 
     [Fact]
@@ -288,68 +318,110 @@ public class QuickSwitchTests
         Assert.Null(model.Confirm());
     }
 
+    private static TraySnapshot Snap(params BenchStatus[] benches) => new(benches);
+
     [Fact]
-    public void NoSiteInDeveloperModeGivesItsCopy()
+    public void NoDefaultSiteInDeveloperModeGivesItsCopy()
     {
-        var target = QuickSwitchModel.Choose([Bench("/b", BenchState.Running, ("a.localhost", true, false))], false, null);
+        var target = QuickSwitchModel.Choose(Snap(Bench("/b", BenchState.Running, ("a.localhost", true, false))), null);
         Assert.Equal(QuickSwitchState.NoDeveloperSite, target.State);
-        Assert.Equal("No site in developer mode — run benchbar open --help", target.Message);
+        Assert.Contains("default site", target.Message);
+        Assert.DoesNotContain("benchbar open --help", target.Message);
         Assert.Null(target.Bench);
+    }
+
+    [Fact]
+    public void OnlyTheDefaultSiteIsOfferedBecauseBenchServeAnswersForNoOtherSite()
+    {
+        var nonDefaultOnly = Bench("/run", BenchState.Running, ("def.localhost", true, false), ("dev.localhost", false, true));
+        Assert.Equal(QuickSwitchState.NoDeveloperSite, QuickSwitchModel.Choose(Snap(nonDefaultOnly), null).State);
+
+        var both = Bench("/run", BenchState.Running, ("dev1.localhost", false, true), ("def.localhost", true, true), ("dev2.localhost", false, true));
+        var target = QuickSwitchModel.Choose(Snap(both), null);
+        Assert.Equal(QuickSwitchState.Ready, target.State);
+        Assert.Equal(["def.localhost"], target.Sites);
+        Assert.Equal("def.localhost", target.StartSite);
+        Assert.Equal(["def.localhost"], both.OpenAsSites.Select(s => s.Name));
     }
 
     [Fact]
     public void AStoppedBenchGivesItsCopy()
     {
-        var stopped = QuickSwitchModel.Choose([Bench("/b", BenchState.Stopped, ("a.localhost", true, true))], false, null);
+        var stopped = QuickSwitchModel.Choose(Snap(Bench("/b", BenchState.Stopped, ("a.localhost", true, true))), null);
         Assert.Equal(QuickSwitchState.BenchStopped, stopped.State);
         Assert.StartsWith("Start the bench first", stopped.Message);
 
-        var noneRunning = QuickSwitchModel.Choose([Bench("/b", BenchState.Stopped)], false, null);
+        var noneRunning = QuickSwitchModel.Choose(Snap(Bench("/b", BenchState.Stopped)), null);
         Assert.Equal(QuickSwitchState.BenchStopped, noneRunning.State);
+    }
+
+    [Fact]
+    public void AStartingBenchSaysItIsStartingNotToStartIt()
+    {
+        var withSite = QuickSwitchModel.Choose(Snap(Bench("/work/b", BenchState.Starting, ("a.localhost", true, true))), null);
+        Assert.Equal(QuickSwitchState.BenchStarting, withSite.State);
+        Assert.Equal("b is starting.", withSite.Message);
+
+        var noSiteYet = QuickSwitchModel.Choose(Snap(Bench("/work/b", BenchState.Starting)), null);
+        Assert.Equal(QuickSwitchState.BenchStarting, noSiteYet.State);
+        Assert.Equal("b is starting.", noSiteYet.Message);
+    }
+
+    [Fact]
+    public void AProblemOfTheSnapshotIsShownAsItIsNotAsAStoppedBench()
+    {
+        var snapshot = new TraySnapshot(
+            [Bench("/b", BenchState.Unknown)], Problem: "benchbar.exe was not found. Put it next to BenchBarTray.exe or on PATH (benchbar.exe path install).");
+        var target = QuickSwitchModel.Choose(snapshot, null);
+        Assert.Equal(QuickSwitchState.Problem, target.State);
+        Assert.Equal(snapshot.Problem, target.Message);
+    }
+
+    [Fact]
+    public void BeforeTheFirstPollItSaysLoadingAndAfterAPollWithNoBenchesItDoesNot()
+    {
+        var loading = QuickSwitchModel.Choose(TraySnapshot.Empty, null);
+        Assert.Equal(QuickSwitchState.Loading, loading.State);
+        Assert.Equal("Loading…", loading.Message);
+
+        Assert.Equal(QuickSwitchState.NoDeveloperSite, QuickSwitchModel.Choose(new TraySnapshot([]), null).State);
     }
 
     [Fact]
     public void AStoppedDistroGivesItsCopyAndNeverPicksABench()
     {
-        var target = QuickSwitchModel.Choose([Bench("/b", BenchState.Running, ("a.localhost", true, true))], distroStopped: true, null);
+        var snapshot = new TraySnapshot([Bench("/b", BenchState.Running, ("a.localhost", true, true))], DistroStopped: true, Distro: "Ubuntu");
+        var target = QuickSwitchModel.Choose(snapshot, null);
         Assert.Equal(QuickSwitchState.DistroStopped, target.State);
         Assert.StartsWith("The WSL distro is stopped", target.Message);
         Assert.Null(target.Bench);
     }
 
     [Fact]
-    public void TheRunningBenchWithADeveloperSiteIsChosenAndOnlyThoseSitesAreOffered()
+    public void TheRunningBenchWithADefaultDeveloperSiteIsChosen()
     {
         var benches = new[]
         {
             Bench("/stopped", BenchState.Stopped, ("s.localhost", true, true)),
-            Bench("/run", BenchState.Running, ("plain.localhost", true, false), ("dev1.localhost", false, true), ("dev2.localhost", false, true)),
+            Bench("/plain", BenchState.Running, ("plain.localhost", true, false)),
+            Bench("/run", BenchState.Running, ("dev.localhost", true, true)),
         };
-        var target = QuickSwitchModel.Choose(benches, false, null);
+        var target = QuickSwitchModel.Choose(Snap(benches), null);
         Assert.Equal(QuickSwitchState.Ready, target.State);
         Assert.Equal("/run", target.Bench!.Path);
-        Assert.Equal(["dev1.localhost", "dev2.localhost"], target.Sites);
-        Assert.Equal("dev1.localhost", target.StartSite);
+        Assert.Equal(["dev.localhost"], target.Sites);
     }
 
     [Fact]
-    public void TheDefaultDeveloperSiteStartsAndTheLastSwitchedSiteWins()
-    {
-        var bench = Bench("/run", BenchState.Running, ("a.localhost", false, true), ("b.localhost", true, true));
-        Assert.Equal("b.localhost", QuickSwitchModel.Choose([bench], false, null).StartSite);
-        Assert.Equal("a.localhost", QuickSwitchModel.Choose([bench], false, ("/run", "a.localhost")).StartSite);
-        Assert.Equal("b.localhost", QuickSwitchModel.Choose([bench], false, ("/run", "gone.localhost")).StartSite);
-    }
-
-    [Fact]
-    public void TheBenchOfTheLastSwitchIsPreferred()
+    public void TheBenchOfTheLastSwitchIsPreferredAndTheLastSiteIsKeptOnlyWhenOffered()
     {
         var benches = new[]
         {
             Bench("/one", BenchState.Running, ("one.localhost", true, true)),
             Bench("/two", BenchState.Running, ("two.localhost", true, true)),
         };
-        var target = QuickSwitchModel.Choose(benches, false, ("/two", "two.localhost"));
+        var target = QuickSwitchModel.Choose(Snap(benches), ("/two", "two.localhost"));
         Assert.Equal("/two", target.Bench!.Path);
+        Assert.Equal("two.localhost", QuickSwitchModel.Choose(Snap(benches), ("/two", "gone.localhost")).StartSite);
     }
 }

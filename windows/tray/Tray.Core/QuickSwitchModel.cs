@@ -19,15 +19,21 @@ public sealed record QuickSwitchData(
     public static QuickSwitchData Empty { get; } = new(_ => [], _ => null, _ => null, (_, user) => user, (_, _) => null);
 }
 
-public enum QuickSwitchState { Ready, DistroStopped, BenchStopped, NoDeveloperSite }
+public enum QuickSwitchState { Ready, Problem, Loading, DistroStopped, BenchStarting, BenchStopped, NoDeveloperSite }
 
-/// <summary>The bench and sites the panel works on, or the reason it has none.</summary>
+/// <summary>
+/// The bench and sites the panel works on, or the reason it has none. <paramref name="Detail"/> is the line for a state that
+/// needs words of its own: the snapshot's problem text, or which bench is starting.
+/// </summary>
 public sealed record QuickSwitchTarget(
-    QuickSwitchState State, BenchStatus? Bench, IReadOnlyList<string> Sites, string? StartSite)
+    QuickSwitchState State, BenchStatus? Bench, IReadOnlyList<string> Sites, string? StartSite, string? Detail = null)
 {
     public string? Message => State switch
     {
+        QuickSwitchState.Problem => Detail,
+        QuickSwitchState.Loading => QuickSwitchModel.LoadingText,
         QuickSwitchState.DistroStopped => QuickSwitchModel.DistroStoppedText,
+        QuickSwitchState.BenchStarting => Detail ?? QuickSwitchModel.BenchStartingText,
         QuickSwitchState.BenchStopped => QuickSwitchModel.BenchStoppedText,
         QuickSwitchState.NoDeveloperSite => QuickSwitchModel.NoDeveloperSiteText,
         _ => null,
@@ -48,9 +54,11 @@ public sealed class QuickSwitchModel
     public const string NoMatchText = "No users match";
     public const string CurrentMark = "✓";
     public const string CurrentHint = "current";
-    public const string NoDeveloperSiteText = "No site in developer mode — run benchbar open --help";
+    public const string NoDeveloperSiteText = "No default site in developer mode. Open as works on a bench's default site only.";
     public const string BenchStoppedText = "Start the bench first (open BenchBar from the tray).";
-    public const string DistroStoppedText = "The WSL distro is stopped. Start it from the BenchBar flyout first.";
+    public const string BenchStartingText = "The bench is starting.";
+    public const string LoadingText = "Loading…";
+    public const string DistroStoppedText = DistroGuard.StoppedMessage;
 
     private readonly IReadOnlyList<string> _sites;
     private readonly QuickSwitchData _data;
@@ -154,63 +162,84 @@ public sealed class QuickSwitchModel
     /// <summary>The switch for the selected row, or null when there is none or one is already under way.</summary>
     public QuickSwitchChoice? Confirm() => Fire(SelectedRow);
 
-    /// <summary>The switch for a digit key, only while the search box is empty (a digit typed into a query is just text).</summary>
-    public QuickSwitchChoice? ConfirmDigit(int digit) => Query.Length == 0 ? Fire(RowForDigit(digit)) : null;
+    /// <summary>True while a digit key picks a row: the trimmed query is empty. A digit typed into a real query is just text.</summary>
+    public bool DigitsActive => Query.Trim().Length == 0;
+
+    /// <summary>The switch for a digit key, only while <see cref="DigitsActive"/>.</summary>
+    public QuickSwitchChoice? ConfirmDigit(int digit) => DigitsActive ? Fire(RowForDigit(digit)) : null;
 
     /// <summary>After a failed switch: Enter works again.</summary>
     public void Rearm() => _fired = false;
 
-    /// <summary>Row 1 is key 1 … row 9 is key 9, row 10 is key 0; null past the last row.</summary>
+    /// <summary>
+    /// Keys 1 to 9 are the pins in order, key 0 is Administrator, so a digit never moves when Switch Back appears.
+    /// Switch Back and the searched users have no digit. Null when no row has that digit.
+    /// </summary>
     public QuickRow? RowForDigit(int digit)
     {
-        var index = IndexForDigit(digit);
         var rows = Rows;
-        return index >= 0 && index < rows.Count ? rows[index] : null;
+        for (var i = 0; i < rows.Count; i++)
+        {
+            if (DigitLabel(i) == digit.ToString(System.Globalization.CultureInfo.InvariantCulture)) return rows[i];
+        }
+        return null;
     }
 
-    public static int IndexForDigit(int digit) => digit switch
+    /// <summary>The key shown beside row <paramref name="index"/> of <see cref="Rows"/>: the pin's place "1".."9", "0" for Administrator, else null.</summary>
+    public string? DigitLabel(int index)
     {
-        0 => 9,
-        >= 1 and <= 9 => digit - 1,
-        _ => -1,
-    };
-
-    /// <summary>The key shown beside row <paramref name="index"/>: "1".."9", then "0"; null for the rows after the tenth.</summary>
-    public static string? DigitLabel(int index) => index switch
-    {
-        >= 0 and <= 8 => (index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
-        9 => "0",
-        _ => null,
-    };
+        var rows = Rows;
+        if (index < 0 || index >= rows.Count) return null;
+        switch (rows[index].Kind)
+        {
+            case QuickRowKind.Administrator:
+                return "0";
+            case QuickRowKind.Pin:
+                var place = rows.Take(index).Count(r => r.Kind == QuickRowKind.Pin) + 1;
+                return place <= 9 ? place.ToString(System.Globalization.CultureInfo.InvariantCulture) : null;
+            default:
+                return null;
+        }
+    }
 
     /// <summary>
-    /// The bench and sites for the panel. The bench of the last switch when it still has a developer-mode site, else the
-    /// first running bench with one, else the first with one (which is then stopped). The start site is the last one
-    /// switched on, else the bench's default site, else the first.
+    /// The bench and sites for the panel, or the one reason it has none. A problem line of the snapshot (shim missing,
+    /// WSL silent) and a stopped distro come first; the snapshot that is still <see cref="TraySnapshot.Empty"/> is "Loading…"
+    /// (nothing was polled yet). Only a bench's default site in developer mode is offered (<see cref="BenchStatus.OpenAsSites"/>).
+    /// The bench of the last switch when it has one, else the first running bench with one, else the first with one
+    /// (which is then stopped or starting). The start site is the last one switched on, else the first.
     /// </summary>
-    public static QuickSwitchTarget Choose(
-        IReadOnlyList<BenchStatus> benches, bool distroStopped, (string BenchPath, string Site)? last)
+    public static QuickSwitchTarget Choose(TraySnapshot snapshot, (string BenchPath, string Site)? last)
     {
-        if (distroStopped) return new QuickSwitchTarget(QuickSwitchState.DistroStopped, null, [], null);
+        if (snapshot.Problem is { Length: > 0 } problem) return new QuickSwitchTarget(QuickSwitchState.Problem, null, [], null, problem);
+        if (snapshot.DistroStopped) return new QuickSwitchTarget(QuickSwitchState.DistroStopped, null, [], null);
+        if (ReferenceEquals(snapshot, TraySnapshot.Empty)) return new QuickSwitchTarget(QuickSwitchState.Loading, null, [], null);
 
-        var candidates = benches.Where(b => b.Sites.Any(s => s.DeveloperMode)).ToList();
-        if (candidates.Count == 0)
-        {
-            var anyRunning = benches.Any(b => b.State == BenchState.Running);
-            return new QuickSwitchTarget(
-                benches.Count > 0 && !anyRunning ? QuickSwitchState.BenchStopped : QuickSwitchState.NoDeveloperSite, null, [], null);
-        }
+        var benches = snapshot.Benches;
+        var candidates = benches.Where(b => b.OpenAsSites.Count > 0).ToList();
+        if (candidates.Count == 0) return NoCandidate(benches);
 
         var bench = candidates.FirstOrDefault(b => last is { } l && b.Path == l.BenchPath)
                     ?? candidates.FirstOrDefault(b => b.State == BenchState.Running)
                     ?? candidates[0];
-        var sites = bench.Sites.Where(s => s.DeveloperMode).ToList();
-        var start = last is { } l2 && bench.Path == l2.BenchPath && sites.Any(s => s.Name == l2.Site)
-            ? l2.Site
-            : (sites.FirstOrDefault(s => s.IsDefault) ?? sites[0]).Name;
+        var sites = bench.OpenAsSites;
+        var start = last is { } l2 && bench.Path == l2.BenchPath && sites.Any(s => s.Name == l2.Site) ? l2.Site : sites[0].Name;
         var names = sites.Select(s => s.Name).ToList();
+        return bench.State switch
+        {
+            BenchState.Running => new QuickSwitchTarget(QuickSwitchState.Ready, bench, names, start),
+            BenchState.Starting => new QuickSwitchTarget(QuickSwitchState.BenchStarting, bench, names, start, $"{bench.Name} is starting."),
+            _ => new QuickSwitchTarget(QuickSwitchState.BenchStopped, bench, names, start),
+        };
+    }
+
+    private static QuickSwitchTarget NoCandidate(IReadOnlyList<BenchStatus> benches)
+    {
+        if (benches.Any(b => b.State == BenchState.Running)) return new QuickSwitchTarget(QuickSwitchState.NoDeveloperSite, null, [], null);
+        if (benches.FirstOrDefault(b => b.State == BenchState.Starting) is { } starting)
+            return new QuickSwitchTarget(QuickSwitchState.BenchStarting, null, [], null, $"{starting.Name} is starting.");
         return new QuickSwitchTarget(
-            bench.State == BenchState.Running ? QuickSwitchState.Ready : QuickSwitchState.BenchStopped, bench, names, start);
+            benches.Count > 0 ? QuickSwitchState.BenchStopped : QuickSwitchState.NoDeveloperSite, null, [], null);
     }
 
     private QuickSwitchChoice? Fire(QuickRow? row)

@@ -115,15 +115,34 @@ public class OpenAsTests
     }
 
     [Fact]
-    public async Task AReusedSessionLandsOnTheCliDefaultPathWhenNoneIsGiven()
+    public async Task AReusedSessionLandsByUserTypeNotOnThePathOfTheFirstSwitch()
     {
         var rig = new Rig();
-        rig.Source.Output = _ => OpenJson("a.localhost", 8000, "visitor@x.com", "sidW").Replace("\"path\":\"/app\"", "\"path\":\"/\"");
+        rig.Source.Output = args =>
+        {
+            var user = args[Array.IndexOf(args, "--as") + 1];
+            var json = OpenJson("a.localhost", 8000, user, "sid-" + user);
+            return user.StartsWith("visitor", StringComparison.Ordinal) ? json.Replace("System User", "Website User").Replace("\"path\":\"/app\"", "\"path\":\"/\"") : json;
+        };
+        rig.Who = sid => sid["sid-".Length..];
+
         await rig.Service.SwitchAsync(Bench(), "a.localhost", "visitor@x.com", null, Ct);
-        rig.Who = _ => "visitor@x.com";
-        var (url, _) = await rig.Service.SwitchAsync(Bench(), "a.localhost", "visitor@x.com", null, Ct);
-        Assert.Equal("%2F", Query(url!, "redirect-to"));
+        await rig.Service.SwitchAsync(Bench(), "a.localhost", "ne@x.com", "/app/todo", Ct); // the first switch had a path
+        var (website, _) = await rig.Service.SwitchAsync(Bench(), "a.localhost", "visitor@x.com", null, Ct);
+        var (desk, _) = await rig.Service.SwitchAsync(Bench(), "a.localhost", "ne@x.com", null, Ct);
+
+        Assert.Equal("%2F", Query(website!, "redirect-to"));
+        Assert.Equal("%2Fapp", Query(desk!, "redirect-to")); // not /app/todo
+        Assert.Equal(2, rig.Source.OutputCalls.Count);
     }
+
+    [Theory]
+    [InlineData("Website User", "/")]
+    [InlineData("website user", "/")]
+    [InlineData("System User", "/app")]
+    [InlineData("", "/app")]
+    public void TheLandingPathComesFromTheUserType(string userType, string expected) =>
+        Assert.Equal(expected, OpenAsService.LandingPathFor(userType));
 
     [Theory]
     [InlineData("Guest")]
@@ -216,6 +235,12 @@ public class OpenAsTests
         Assert.Null(rig.Service.CurrentUser("/b", "a.localhost"));
     }
 
+    private static async Task Open(Rig rig, string user, string site = "a.localhost")
+    {
+        await rig.Service.SwitchAsync(Bench(), site, user, null, Ct);
+        rig.Service.MarkOpened("/b", site, user);
+    }
+
     [Fact]
     public async Task RecentsKeepTwoNewestFirstAndSwitchBackPointsAtThePreviousUser()
     {
@@ -223,29 +248,78 @@ public class OpenAsTests
         Assert.Null(rig.Service.CurrentUser("/b", "a.localhost"));
         Assert.Null(rig.Service.PreviousUser("/b", "a.localhost"));
 
-        foreach (var user in new[] { "a@x.com", "b@x.com", "c@x.com" })
-            await rig.Service.SwitchAsync(Bench(), "a.localhost", user, null, Ct);
+        foreach (var user in new[] { "a@x.com", "b@x.com", "c@x.com" }) await Open(rig, user);
         Assert.Equal("c@x.com", rig.Service.CurrentUser("/b", "a.localhost"));
         Assert.Equal("b@x.com", rig.Service.PreviousUser("/b", "a.localhost"));
 
-        await rig.Service.SwitchAsync(Bench(), "a.localhost", "b@x.com", null, Ct);
+        await Open(rig, "b@x.com");
         Assert.Equal("b@x.com", rig.Service.CurrentUser("/b", "a.localhost"));
         Assert.Equal("c@x.com", rig.Service.PreviousUser("/b", "a.localhost"));
 
-        await rig.Service.SwitchAsync(Bench(), "a.localhost", "b@x.com", null, Ct); // a click always switches, never "already b"
+        await Open(rig, "b@x.com"); // a click always switches, never "already b"
         Assert.Equal("c@x.com", rig.Service.PreviousUser("/b", "a.localhost"));
 
         Assert.Null(rig.Service.CurrentUser("/b", "two.localhost"));
     }
 
     [Fact]
+    public async Task ASwitchIsOnlyRecordedWhenTheCallerSaysTheBrowserOpened()
+    {
+        var rig = new Rig();
+        var (url, error) = await rig.Service.SwitchAsync(Bench(), "a.localhost", "u@x.com", null, Ct);
+        Assert.NotNull(url);
+        Assert.Null(error);
+        Assert.Null(rig.Service.CurrentUser("/b", "a.localhost")); // the browser launch may still fail
+        Assert.Null(rig.Service.CurrentLabel("/b", "a.localhost", []));
+
+        rig.Service.MarkOpened("/b", "a.localhost", "u@x.com");
+        Assert.Equal("u@x.com", rig.Service.CurrentUser("/b", "a.localhost"));
+    }
+
+    [Fact]
+    public async Task TheSameUserInAnotherCaseIsOneRecentAndOneSession()
+    {
+        var rig = new Rig { Who = _ => "ne@x.com" };
+        await Open(rig, "ne@x.com");
+        await Open(rig, "other@x.com");
+        await Open(rig, "NE@x.com");
+
+        Assert.Equal("NE@x.com", rig.Service.CurrentUser("/b", "a.localhost"));
+        Assert.Equal("other@x.com", rig.Service.PreviousUser("/b", "a.localhost"));
+        Assert.Equal(2, rig.Source.OutputCalls.Count); // the second ne@x.com reused the first session
+    }
+
+    [Fact]
+    public async Task ASwitchCancelledWhileTheCliRunsThrowsAndLeavesNoSessionAndNoRecent()
+    {
+        var rig = new Rig();
+        using var cts = new CancellationTokenSource();
+        var output = rig.Source.Output;
+        rig.Source.Output = args =>
+        {
+            cts.Cancel(); // the panel was closed while the CLI ran
+            return output(args);
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => rig.Service.SwitchAsync(Bench(), "a.localhost", "u@x.com", null, cts.Token));
+        Assert.Null(rig.Service.CurrentUser("/b", "a.localhost"));
+
+        rig.Source.Output = output;
+        rig.Who = _ => "u@x.com";
+        await rig.Service.SwitchAsync(Bench(), "a.localhost", "u@x.com", null, Ct);
+        Assert.Equal(2, rig.Source.OutputCalls.Count); // nothing was cached from the cancelled one
+        Assert.Empty(rig.Checks);
+    }
+
+    [Fact]
     public async Task TheLabelIsThePinLabelElseTheFullNameElseTheUserId()
     {
         var rig = new Rig();
-        await rig.Service.SwitchAsync(Bench(), "a.localhost", "a@x.com", null, Ct);
+        await Open(rig, "a@x.com");
         PinnedUser[] pins = [new PinnedUser("a@x.com", "NE"), new PinnedUser("p@x.com", null)];
 
         Assert.Equal("NE", rig.Service.LabelFor("/b", "a.localhost", "a@x.com", pins));
+        Assert.Equal("NE", rig.Service.LabelFor("/b", "a.localhost", "A@X.com", pins)); // user ids are case-insensitive
         Assert.Equal("Full a@x.com", rig.Service.LabelFor("/b", "a.localhost", "a@x.com", []));
         Assert.Equal("p@x.com", rig.Service.LabelFor("/b", "a.localhost", "p@x.com", pins));
         Assert.Equal("NE", rig.Service.CurrentLabel("/b", "a.localhost", pins));
@@ -287,6 +361,9 @@ public class OpenAsTests
     [InlineData("/app/x?sid=old&a=1", "%2Fapp%2Fx%3Fa%3D1")]
     [InlineData("/app/x?a=1&sid", "%2Fapp%2Fx%3Fa%3D1")]
     [InlineData("/app/x?mysid=keep", "%2Fapp%2Fx%3Fmysid%3Dkeep")]
+    [InlineData("/app/x?a=1&&b=2&sid=z", "%2Fapp%2Fx%3Fa%3D1%26b%3D2")]
+    [InlineData("/app/x?&sid&", "%2Fapp%2Fx")]
+    [InlineData("/app/x?sid&a=1", "%2Fapp%2Fx%3Fa%3D1")]
     [InlineData("/app/a b+c", "%2Fapp%2Fa%20b%2Bc")]
     [InlineData("/app/q?name=o'brien", "%2Fapp%2Fq%3Fname%3Do%27brien")]
     [InlineData("", "%2F")]
@@ -377,13 +454,16 @@ public class OpenAsTests
     }
 
     [Fact]
-    public async Task TheShimReturnsStdoutOfOpenAndUsersWithTheDefaultTimeout()
+    public async Task TheShimReturnsStdoutOfOpenWithAMinuteAndOfUsersWithTheReadTimeout()
     {
         var runner = new FakeProcessRunner { Answer = (_, _) => new ProcessResult(0, "{\"ok\":true}", "") };
         var source = new ShimBenchSource(runner, () => @"C:\bin\benchbar.exe");
 
         Assert.Equal("{\"ok\":true}", await source.RunForOutputAsync(["open", "--site", "a+b"], Ct));
         Assert.Equal(["open", "--site", "a+b"], runner.Calls[0].Args);
+        Assert.Equal(TimeSpan.FromSeconds(60), runner.LastTimeout); // a cold sign-in under WSL can pass the 30 s read timeout
+
+        await source.RunForOutputAsync(["users", "--site", "a"], Ct);
         Assert.Equal(ShimBenchSource.ReadTimeout, runner.LastTimeout);
     }
 

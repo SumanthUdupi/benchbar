@@ -206,12 +206,29 @@ public class FlyoutViewTests
             Dev("running-dev", "running", ("a.localhost", true)),
             Dev("stopped-dev", "stopped", ("a.localhost", true)),
             Dev("running-prod", "running", ("a.localhost", false)),
+            Dev("dev-elsewhere", "running", ("a.localhost", false), ("b.localhost", true)),
             Status("old-cli", "running"),
-        ]), "1 of 4 up");
+        ]), "1 of 5 up");
 
-        Assert.Equal([true, false, false, false], view.Rows.Select(r => OpenAsButton(r).IsEnabled));
+        Assert.Equal([true, false, false, false, false], view.Rows.Select(r => OpenAsButton(r).IsEnabled));
         Assert.Equal("Start the bench to open a site as another user", OpenAsButton(view.Rows[1]).ToolTip);
         Assert.Equal("No site of this bench is in developer mode", OpenAsButton(view.Rows[2]).ToolTip);
+    });
+
+    [Fact]
+    public void OpenAsNeedsTheDefaultSiteInDeveloperModeAndTheTooltipSaysWhy() => Sta.Run(() =>
+    {
+        var view = new FlyoutView(new FlyoutActions());
+        var elsewhere = Dev("elsewhere", "running", ("def.localhost", false), ("dev.localhost", true));
+        view.SetSnapshot(new TraySnapshot([elsewhere]), "1 of 1 up");
+
+        // bench serve answers for the default site only, so a developer-mode site that is not the default cannot be signed in to
+        Assert.Empty(elsewhere.OpenAsSites);
+        Assert.False(OpenAsButton(view.Rows[0]).IsEnabled);
+        Assert.Equal("Open as works on the default site only, and the default site is not in developer mode", OpenAsButton(view.Rows[0]).ToolTip);
+
+        var both = Dev("both", "running", ("def.localhost", true), ("dev.localhost", true));
+        Assert.Equal(["def.localhost"], both.OpenAsSites.Select(s => s.Name));
     });
 
     [Fact]
@@ -227,16 +244,16 @@ public class FlyoutViewTests
     {
         var view = new FlyoutView(new FlyoutActions());
         var bench = Dev("b", "running", ("a.localhost", true), ("b.localhost", false));
-        var menu = view.BuildOpenAsMenu(bench, bench.Sites.Where(s => s.DeveloperMode).ToList());
+        var menu = view.BuildOpenAsMenu(bench, bench.OpenAsSites);
         Assert.Equal(["Administrator", "-", "Find User…"], Headers(menu));
     });
 
     [Fact]
-    public void SeveralDeveloperModeSitesGiveASubmenuEach() => Sta.Run(() =>
+    public void AMenuBuiltForSeveralSitesGivesASubmenuEach() => Sta.Run(() =>
     {
         var view = new FlyoutView(new FlyoutActions());
         var bench = Dev("b", "running", ("a.localhost", true), ("b.localhost", true), ("c.localhost", false));
-        var menu = view.BuildOpenAsMenu(bench, bench.Sites.Where(s => s.DeveloperMode).ToList());
+        var menu = view.BuildOpenAsMenu(bench, bench.Sites.Where(s => s.DeveloperMode).ToList()); // the flyout itself passes one site, the default
         Assert.Equal(["a.localhost", "b.localhost"], Headers(menu));
         Assert.Equal(["Administrator", "-", "Find User…"], Headers((MenuItem)menu.Items[1]));
     });

@@ -21,11 +21,11 @@ public sealed class OpenAsService(
     public const string UnreadableMessage = "benchbar answered with something the tray could not read.";
 
     // A class, not a record: a record's generated ToString would print the session id.
-    private sealed class Session(string baseUrl, string sid, string landingPath)
+    private sealed class Session(string baseUrl, string sid, string userType)
     {
         public string BaseUrl { get; } = baseUrl;
         public string Sid { get; } = sid;
-        public string LandingPath { get; } = landingPath;
+        public string UserType { get; } = userType;
     }
 
     private readonly object _gate = new();
@@ -34,11 +34,19 @@ public sealed class OpenAsService(
     private readonly Dictionary<string, string> _fullNames = [];
     private long _lastStamp;
 
-    private static string UserKey(string benchPath, string site, string user) => TrayConfig.PinKey(benchPath, site) + "|" + user;
+    // Frappe user ids are case-insensitive, so "Ne@x.com" and "ne@x.com" are one user and one session
+    private static string UserKey(string benchPath, string site, string user) =>
+        TrayConfig.PinKey(benchPath, site) + "|" + user.ToUpperInvariant();
+
+    /// <summary>Where a session lands when the caller gave no path: the desk, except for a Website User, who has none (matches the CLI).</summary>
+    public static string LandingPathFor(string userType) =>
+        string.Equals(userType, "Website User", StringComparison.OrdinalIgnoreCase) ? "/" : "/app";
 
     /// <summary>
     /// Opens <paramref name="site"/> as <paramref name="user"/>: the cached session when it is still alive, else a new
     /// one from the CLI. The URL is for the browser only. A refusal comes back as <c>Error</c> (the CLI's own line).
+    /// Nothing is recorded as "current" here: call <see cref="MarkOpened"/> once the browser has the URL. A cancelled
+    /// <paramref name="ct"/> throws <see cref="OperationCanceledException"/> and leaves no trace.
     /// </summary>
     public async Task<(Uri? Url, string? Error)> SwitchAsync(
         BenchStatus bench, string site, string user, string? path, CancellationToken ct)
@@ -52,8 +60,8 @@ public sealed class OpenAsService(
         {
             if (await IsAliveAsync(cached, user, ct).ConfigureAwait(false))
             {
-                Remember(bench.Path, site, user);
-                return (BuildLoginUrl(cached.BaseUrl, path ?? cached.LandingPath, cached.Sid, NextStamp()), null);
+                ct.ThrowIfCancellationRequested();
+                return (BuildLoginUrl(cached.BaseUrl, path ?? LandingPathFor(cached.UserType), cached.Sid, NextStamp()), null);
             }
             lock (_gate) _sessions.Remove(key);
         }
@@ -64,16 +72,16 @@ public sealed class OpenAsService(
         try
         {
             var result = BenchJson.ParseOpenAs(await source.RunForOutputAsync([.. args], ct).ConfigureAwait(false));
+            ct.ThrowIfCancellationRequested();
             if (result.Url is null || !Uri.TryCreate(result.Url, UriKind.Absolute, out var url)) return (null, UnsupportedMessage);
             if (SidOf(url) is { } sid)
             {
                 lock (_gate)
                 {
-                    _sessions[key] = new Session(url.GetLeftPart(UriPartial.Authority), sid, result.Path);
+                    _sessions[key] = new Session(url.GetLeftPart(UriPartial.Authority), sid, result.UserType);
                     if (result.FullName.Length > 0) _fullNames[key] = result.FullName;
                 }
             }
-            Remember(bench.Path, site, user);
             return (url, null);
         }
         catch (SourceProblemException ex)
@@ -118,6 +126,9 @@ public sealed class OpenAsService(
         }
     }
 
+    /// <summary>Records that the browser was opened as <paramref name="user"/> on this site: what "current" and "Switch Back" read.</summary>
+    public void MarkOpened(string benchPath, string site, string user) => Remember(benchPath, site, user);
+
     /// <summary>The user the browser was last switched to on this site, or null.</summary>
     public string? CurrentUser(string benchPath, string site) => RecentAt(benchPath, site, 0);
 
@@ -133,7 +144,7 @@ public sealed class OpenAsService(
     /// <summary>The pin label, else the full name this service has seen, else the user id.</summary>
     public string LabelFor(string benchPath, string site, string user, IReadOnlyList<PinnedUser> pins)
     {
-        if (pins.FirstOrDefault(p => p.User == user)?.Label is { Length: > 0 } label) return label;
+        if (pins.FirstOrDefault(p => string.Equals(p.User, user, StringComparison.OrdinalIgnoreCase))?.Label is { Length: > 0 } label) return label;
         lock (_gate) return _fullNames.TryGetValue(UserKey(benchPath, site, user), out var name) ? name : user;
     }
 
@@ -154,7 +165,7 @@ public sealed class OpenAsService(
             $"&sid={Uri.EscapeDataString(sid)}&t={ms.ToString(CultureInfo.InvariantCulture)}");
     }
 
-    /// <summary>The path with any <c>sid</c> query parameter removed; the other parameters and the fragment stay.</summary>
+    /// <summary>The path with any <c>sid</c> query parameter (also a bare <c>sid</c>) and any empty <c>&amp;&amp;</c> part removed; the other parameters and the fragment stay.</summary>
     internal static string WithoutSid(string path)
     {
         var hash = path.IndexOf('#');
@@ -163,7 +174,7 @@ public sealed class OpenAsService(
         var mark = beforeFragment.IndexOf('?');
         if (mark < 0) return path;
         var kept = beforeFragment[(mark + 1)..].Split('&')
-            .Where(p => p != "sid" && !p.StartsWith("sid=", StringComparison.Ordinal));
+            .Where(p => p.Length > 0 && p != "sid" && !p.StartsWith("sid=", StringComparison.Ordinal));
         var query = string.Join('&', kept);
         return beforeFragment[..mark] + (query.Length > 0 ? "?" + query : "") + fragment;
     }
@@ -226,7 +237,7 @@ public sealed class OpenAsService(
         {
             var key = TrayConfig.PinKey(benchPath, site);
             if (!_recents.TryGetValue(key, out var recents)) _recents[key] = recents = [];
-            recents.Remove(user);
+            recents.RemoveAll(u => string.Equals(u, user, StringComparison.OrdinalIgnoreCase));
             recents.Insert(0, user);
             if (recents.Count > RecentsKept) recents.RemoveRange(RecentsKept, recents.Count - RecentsKept);
         }

@@ -164,6 +164,9 @@ public sealed class ShimBenchSource : IBenchSource
     /// <summary>doctor and report run many checks: 2 minutes.</summary>
     public static readonly TimeSpan SlowReadTimeout = TimeSpan.FromSeconds(120);
 
+    /// <summary>open signs in through the site's login hooks; a cold sign-in under WSL can pass 30 seconds: 1 minute.</summary>
+    public static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(60);
+
     /// <summary>list, status and logs: 30 seconds.</summary>
     public static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(30);
 
@@ -172,6 +175,7 @@ public sealed class ShimBenchSource : IBenchSource
     {
         "up" or "down" or "restart" => ActionTimeout,
         "report" or "doctor" => SlowReadTimeout,
+        "open" => OpenTimeout,
         _ => ReadTimeout,
     } : ReadTimeout;
 

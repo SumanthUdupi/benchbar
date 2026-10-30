@@ -132,18 +132,22 @@ Left click opens the flyout, one row per bench:
 - **Doctor**: the checks of `benchbar doctor` with their fix lines and a
   Copy button. It changes nothing.
 - **Open as…**: opens a site of the bench in your browser signed in as
-  another user, with no password. It needs a running bench and a site in
-  developer mode, and is greyed out otherwise. The menu holds **Switch Back
+  another user, with no password. It needs a running bench whose **default
+  site** is in developer mode, and is greyed out otherwise (the tooltip says
+  which). It works on the default site only: BenchBar serves the bench's
+  web port without `--site`, so that port answers for the default site
+  whatever address the browser used, and a session made in any other site
+  would land you logged out. The menu holds **Switch Back
   to {label}** (the user before the current one), your pinned users,
-  Administrator and **Find User…**; a bench with several developer-mode
-  sites has a submenu per site. The label is the pin's label, else the
+  Administrator and **Find User…**. The label is the pin's label, else the
   user's full name, else the user id. Find User… opens a window that
   searches the site's enabled users (as you type), opens the site as one,
   and pins up to 9 users per site with a label of your own. Every switch
   opens a new browser tab, and other open tabs of that site keep showing the
   old user until you reload them. The tray reuses a session it made while
   it is still alive; session ids are kept in memory only and are never
-  written to a file. See [`benchbar open`](reference/cli/other.md#open)
+  written to a file. If Windows cannot launch a browser the menu says so and
+  the user is not counted as current. See [`benchbar open`](reference/cli/other.md#open)
   for what it changes on the site (last login, login hooks, older
   sessions of that user ending).
 
@@ -152,17 +156,33 @@ Left click opens the flyout, one row per bench:
   `Open {site} as…`; the rows are **Switch Back to {label}**, your pinned
   users and Administrator, and the current user carries a check mark and
   "current". Up and Down move (wrapping), **Enter** switches, **Esc** or a
-  click elsewhere closes it, **1** to **9** and **0** switch at once while the
-  search box is empty, and **Tab** moves to the next developer-mode site.
+  click elsewhere closes it (closing it mid switch cancels the switch), and
+  **1** to **9** switch to your pinned users at once while the search box is
+  empty (or only spaces); **0** is Administrator. Switch Back has no digit,
+  so a pin keeps its number whether or not Switch Back shows. **Tab** moves
+  to the next developer-mode site.
   Typing filters the rows by label, user id or full name; from 2 characters
   it also searches the site's users and lists up to 8 under "Other users".
   The first row is selected, so Ctrl+Alt+U then Enter toggles between your
-  last two users. The site is the one you last switched on, else the bench's
-  default site. With no developer-mode site the panel says so, and while the
-  distro is stopped it says that and runs nothing. Turn it off, and see
-  whether another app already owns the key, in the tray menu under
-  **Quick Switch: Ctrl+Alt+U**. It uses Windows' own hotkey registration, so
-  no keyboard hook and no permission prompt are involved.
+  last two users. The toggle works after you have switched at least once in
+  this tray session, because Switch Back comes from the tray's memory of
+  that session. The site is the bench's default site (see above). When there
+  is nothing to switch, the panel says why: the tray's own problem line (for
+  example benchbar.exe not found), "Loading…" before the first poll,
+  "{bench} is starting", "Start the bench first", "The WSL distro is
+  stopped", or "No default site in developer mode". It checks WSL itself
+  before running anything, so it never starts a stopped distro. If a switch
+  fails while you are in another window, you get a notification instead of
+  a silent close. Turn it off, and see whether another app already owns the
+  key (the item stays checked and reads "is used by another app"; one click
+  turns it off), in the tray menu under **Quick Switch: Ctrl+Alt+U**. It uses
+  Windows' own hotkey registration, so no keyboard hook and no permission
+  prompt are involved.
+
+  On keyboard layouts where AltGr is Ctrl+Alt (many European layouts),
+  Ctrl+Alt+U is also AltGr+U and registering it blocks that character in
+  every app. If it gets in the way, turn Quick Switch off in the tray menu;
+  the key cannot be changed yet.
 
 Esc closes the flyout, Enter on a row opens the site.
 

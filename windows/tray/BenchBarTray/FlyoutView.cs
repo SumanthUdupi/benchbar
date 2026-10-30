@@ -177,9 +177,9 @@ internal sealed class FlyoutView : UserControl
         string.Join('\n', s.Benches.Select(b =>
             $"{b.Path}|{b.Name}|{b.State}|{b.RawState}|{b.StopReason}|{b.Site}|{b.WebUrl}|{_busy.Contains(b.Path)}|{OpenAsKey(b)}|{(_failures.TryGetValue(b.Path, out var f) ? f.Message : "")}|{b.Problem}")));
 
-    /// <summary>What the row shows of "Open as…": which sites are in developer mode, who each was opened as, and a switch under way.</summary>
+    /// <summary>What the row shows of "Open as…": which sites it works on, who each was opened as, and a switch under way.</summary>
     private string OpenAsKey(BenchStatus bench) => _switching.Contains(bench.Path) + ":" + string.Join(',',
-        bench.Sites.Select(s => $"{s.Name}={s.DeveloperMode}={(s.DeveloperMode ? _actions.OpenAsLabel(bench, s.Name) : "")}"));
+        bench.Sites.Select(s => $"{s.Name}={s.CanOpenAs}={(s.CanOpenAs ? _actions.OpenAsLabel(bench, s.Name) : "")}"));
 
     private void Rebuild()
     {
@@ -292,7 +292,7 @@ internal sealed class FlyoutView : UserControl
         var names = new StackPanel { Margin = new Thickness(10, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
         names.Children.Add(new TextBlock { Text = row.NameText, TextTrimming = TextTrimming.CharacterEllipsis });
         var running = bench.State is BenchState.Running or BenchState.Starting;
-        var devSites = bench.Sites.Where(s => s.DeveloperMode).ToList();
+        var devSites = bench.OpenAsSites;
         var asLabel = bench.State == BenchState.Running && devSites.Any(s => s.Name == row.SiteText) ? _actions.OpenAsLabel(bench, row.SiteText) : null;
         names.Children.Add(new TextBlock { Text = asLabel is null ? row.SiteText : $"{row.SiteText} · as {asLabel}", FontSize = 11, Opacity = 0.65, TextTrimming = TextTrimming.CharacterEllipsis });
         Grid.SetColumn(names, 1);
@@ -326,8 +326,9 @@ internal sealed class FlyoutView : UserControl
         var canOpenAs = bench.State == BenchState.Running && devSites.Count > 0 && !_snapshot.DistroStopped && !_switching.Contains(bench.Path);
         var openAs = TextButton(OpenAsMenuModel.Title, () => { }, enabled: canOpenAs);
         openAs.ToolTip = bench.State != BenchState.Running ? "Start the bench to open a site as another user"
-            : devSites.Count == 0 ? "No site of this bench is in developer mode"
-            : "Open a site signed in as another user";
+            : devSites.Count > 0 ? "Open a site signed in as another user"
+            : bench.Sites.Any(s => s.DeveloperMode) ? "Open as works on the default site only, and the default site is not in developer mode"
+            : "No site of this bench is in developer mode";
         openAs.Click += (_, _) => OpenOpenAsMenu(openAs, bench, devSites);
         var logs = TextButton("Logs", () => _actions.ShowLogs(bench));
         var code = TextButton("VS Code", () => {

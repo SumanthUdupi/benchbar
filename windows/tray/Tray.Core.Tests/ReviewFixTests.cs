@@ -15,6 +15,7 @@ public class TimeoutTests
     [InlineData("up", 180)]
     [InlineData("down", 180)]
     [InlineData("restart", 180)]
+    [InlineData("open", 60)]
     [InlineData("report", 120)]
     [InlineData("doctor", 120)]
     [InlineData("logs", 30)]

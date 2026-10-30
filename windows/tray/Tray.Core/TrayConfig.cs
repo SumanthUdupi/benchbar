@@ -79,6 +79,9 @@ public sealed class TrayConfig
     /// <summary>The key of a site's pins: <c>"&lt;benchPath&gt;|&lt;site&gt;"</c>.</summary>
     public static string PinKey(string benchPath, string site) => benchPath + "|" + site;
 
+    /// <summary>Frappe user ids are case-insensitive: "Ne@x.com" is the pinned "ne@x.com".</summary>
+    public static bool SameUser(string a, string b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
     public IReadOnlyList<PinnedUser> PinsFor(string benchPath, string site) =>
         OpenAsPins.TryGetValue(PinKey(benchPath, site), out var pins) ? pins : [];
 
@@ -88,7 +91,7 @@ public sealed class TrayConfig
         var key = PinKey(benchPath, site);
         if (!OpenAsPins.TryGetValue(key, out var pins)) OpenAsPins[key] = pins = [];
         var cleanLabel = string.IsNullOrWhiteSpace(label) ? null : label.Trim();
-        var at = pins.FindIndex(p => p.User == user);
+        var at = pins.FindIndex(p => SameUser(p.User, user));
         if (at >= 0)
         {
             pins[at] = new PinnedUser(user, cleanLabel);
@@ -103,7 +106,7 @@ public sealed class TrayConfig
     {
         var key = PinKey(benchPath, site);
         if (!OpenAsPins.TryGetValue(key, out var pins)) return;
-        pins.RemoveAll(p => p.User == user);
+        pins.RemoveAll(p => SameUser(p.User, user));
         if (pins.Count == 0) OpenAsPins.Remove(key);
     }
 
@@ -232,7 +235,7 @@ public sealed class TrayConfig
             foreach (var item in array)
             {
                 if (item is not JsonObject entry || ReadString(entry, "user") is not { Length: > 0 } user) continue;
-                if (list.Count >= MaxPinsPerSite || list.Any(p => p.User == user)) continue;
+                if (list.Count >= MaxPinsPerSite || list.Any(p => SameUser(p.User, user))) continue;
                 list.Add(new PinnedUser(user, ReadString(entry, "label") is { Length: > 0 } label ? label : null));
             }
             if (list.Count > 0) OpenAsPins[key] = list;

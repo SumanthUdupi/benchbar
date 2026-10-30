@@ -20,11 +20,15 @@ internal sealed class FindUserActions
 
     public Func<IReadOnlyList<PinnedUser>> Pins { get; set; } = () => [];
 
-    /// <summary>Pins the user with the label (or relabels a pinned one); false when the site has no room for another pin.</summary>
-    public Func<string, string?, bool> Pin { get; set; } = (_, _) => true;
+    /// <summary>Pins the user with the label (or relabels a pinned one).</summary>
+    public Func<string, string?, PinOutcome> Pin { get; set; } = (_, _) => PinOutcome.Saved;
 
-    public Action<string> Unpin { get; set; } = _ => { };
+    /// <summary>Unpins the user; false when config.json could not be written.</summary>
+    public Func<string, bool> Unpin { get; set; } = _ => true;
 }
+
+/// <summary>What pinning did: kept and written, refused (the site has 9 other pins), or kept in memory only because config.json could not be written.</summary>
+internal enum PinOutcome { Saved, NoRoom, NotSaved }
 
 /// <summary>
 /// Search every enabled user of one site, open the site as one of them, and pin the ones used often. The search
@@ -36,6 +40,7 @@ internal sealed class FindUserWindow : ToolWindow
     public const string EmptyText = "No users match";
     public const string TruncatedText = "Showing the first 50; refine the search";
     public const string PinLimitText = "A site can pin at most 9 users.";
+    public const string PinSaveFailedText = "Could not save your pins to config.json; they will be gone after a restart.";
     public const string LabelHint = "Label, e.g. NE";
 
     private static readonly Brush ErrorBrush = Frozen(new SolidColorBrush(Color.FromRgb(0xE5, 0x48, 0x4D)));
@@ -131,7 +136,7 @@ internal sealed class FindUserWindow : ToolWindow
             return;
         }
         var pins = _actions.Pins();
-        foreach (var user in users) _list.Children.Add(UserRow(user, pins.FirstOrDefault(p => p.User == user.Name)));
+        foreach (var user in users) _list.Children.Add(UserRow(user, pins.FirstOrDefault(p => TrayConfig.SameUser(p.User, user.Name))));
     }
 
     private void SetFooter(string text, bool error)
@@ -180,26 +185,29 @@ internal sealed class FindUserWindow : ToolWindow
         {
             if (pin.IsChecked == true)
             {
-                if (!_actions.Pin(user.Name, labelBox.Text))
+                var outcome = _actions.Pin(user.Name, labelBox.Text);
+                if (outcome == PinOutcome.NoRoom)
                 {
                     pin.IsChecked = false;
                     SetFooter(PinLimitText, error: true);
                     return;
                 }
+                if (outcome == PinOutcome.NotSaved) SetFooter(PinSaveFailedText, error: true);
                 pin.Content = "Pinned";
                 labelHost.Visibility = Visibility.Visible;
                 labelBox.Focus();
             }
             else
             {
-                _actions.Unpin(user.Name);
+                if (!_actions.Unpin(user.Name)) SetFooter(PinSaveFailedText, error: true);
                 pin.Content = "Pin";
                 labelHost.Visibility = Visibility.Collapsed;
             }
         };
         void CommitLabel()
         {
-            if (pin.IsChecked == true) _actions.Pin(user.Name, labelBox.Text);
+            if (pin.IsChecked == true && _actions.Pin(user.Name, labelBox.Text) == PinOutcome.NotSaved)
+                SetFooter(PinSaveFailedText, error: true);
         }
         labelBox.LostKeyboardFocus += (_, _) => CommitLabel();
         labelBox.KeyDown += (_, e) =>

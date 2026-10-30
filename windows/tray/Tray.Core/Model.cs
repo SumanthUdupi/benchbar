@@ -10,7 +10,15 @@ public enum BenchState { Unknown, Stopped, Starting, Running, Crashed, Paused }
 /// A site of a bench (<c>sites[]</c> in <c>status --json</c>). Other fields of the CLI are ignored.
 /// <paramref name="DeveloperMode"/> is false when the CLI is too old to report it, which hides "Open as…".
 /// </summary>
-public sealed record SiteInfo(string Name, bool IsDefault, bool DeveloperMode = false);
+public sealed record SiteInfo(string Name, bool IsDefault, bool DeveloperMode = false)
+{
+    /// <summary>
+    /// "Open as…" works on the default site only: the bench serves its web port with no <c>--site</c>, so the port answers for
+    /// the bench's default site whatever Host the browser sends, and a session made in any other site's database
+    /// would land logged out.
+    /// </summary>
+    public bool CanOpenAs => IsDefault && DeveloperMode;
+}
 
 /// <summary>
 /// One bench as <c>status --json</c> reports it. <see cref="Site"/> is null for a bench that has none
@@ -32,6 +40,9 @@ public sealed record BenchStatus(
     public string? LogPath { get; init; }
 
     public IReadOnlyList<SiteInfo> Sites { get; init; } = [];
+
+    /// <summary>The sites "Open as…" and Quick Switch may target: at most one, the default site in developer mode.</summary>
+    public IReadOnlyList<SiteInfo> OpenAsSites => [.. Sites.Where(s => s.CanOpenAs)];
 
     /// <summary>Why this one bench could not be read (its status call failed); null when it answered. Shown under its row.</summary>
     public string? Problem { get; init; }

@@ -23,7 +23,7 @@ internal sealed class TrayMenuModel
     public Action<bool> SetNotifications { get; set; } = _ => { };
     public Func<bool> QuickSwitch { get; set; } = () => true;
     public Action<bool> SetQuickSwitch { get; set; } = _ => { };
-    /// <summary>True when Ctrl+Alt+U could not be registered because another app owns it.</summary>
+    /// <summary>True when Ctrl+Alt+U could not be registered because another app owns it. The item stays checked (the setting is on) and says so.</summary>
     public Func<bool> QuickSwitchTaken { get; set; } = () => false;
     public Func<ResolvedTheme> Theme { get; set; } = () => new ResolvedTheme(false, false);
     public Action CheckForUpdates { get; set; } = () => { };
@@ -121,7 +121,8 @@ internal sealed class TrayMenu
         _logon.IsChecked = _model.LogonEnabled();
         _notifications.IsChecked = _model.Notifications();
         var taken = _model.QuickSwitchTaken();
-        _quickSwitch.IsChecked = _model.QuickSwitch() && !taken;
+        // checked while the setting is on even if the key is taken: one click then turns the setting off, not two
+        _quickSwitch.IsChecked = _model.QuickSwitch();
         _quickSwitch.Header = taken ? QuickSwitchTakenHeader : QuickSwitchHeader;
         var mode = _model.Appearance();
         foreach (var item in _appearance.Items.OfType<MenuItem>()) item.IsChecked = (AppearanceMode)item.Tag == mode;
