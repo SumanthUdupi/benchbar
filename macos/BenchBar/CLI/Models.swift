@@ -49,6 +49,8 @@ nonisolated struct SiteInfo: Codable, Sendable, Equatable, Hashable, Identifiabl
     var isDefault: Bool
     var hostsEntry: Bool
     var pingCode: Int?
+    /// Added with Open as; nil from an older CLI, which hides the menu.
+    var developerMode: Bool? = nil
 
     var id: String { name }
 
@@ -57,6 +59,7 @@ nonisolated struct SiteInfo: Codable, Sendable, Equatable, Hashable, Identifiabl
         case isDefault = "default"
         case hostsEntry = "hosts_entry"
         case pingCode = "ping_code"
+        case developerMode = "developer_mode"
     }
 }
 

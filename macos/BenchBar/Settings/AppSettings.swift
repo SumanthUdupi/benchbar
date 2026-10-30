@@ -19,6 +19,7 @@ final class AppSettings {
         static let editorBundleID = "editorBundleID"
         static let checkUpdatesAutomatically = "checkUpdatesAutomatically"
         static let walkthroughSeen = "walkthroughSeen"
+        static let openAsKeepPage = "openAsKeepPage"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -45,6 +46,10 @@ final class AppSettings {
 
     /// The walkthrough has been shown once on its own (never again after that).
     var walkthroughSeen: Bool { didSet { defaults.set(walkthroughSeen, forKey: Key.walkthroughSeen) } }
+
+    /// Open as sends the browser's current tab to the new session instead of
+    /// opening a tab. Off by default: it needs macOS's Automation permission.
+    var keepPage: Bool { didSet { defaults.set(keepPage, forKey: Key.openAsKeepPage) } }
 
     /// The editors that are installed. Launch Services answers from disk, so
     /// it is asked once at launch and again when any app launches or quits
@@ -75,6 +80,7 @@ final class AppSettings {
         editorBundleID = defaults.string(forKey: Key.editorBundleID) ?? ""
         checkUpdatesAutomatically = defaults.bool(forKey: Key.checkUpdatesAutomatically)
         walkthroughSeen = defaults.bool(forKey: Key.walkthroughSeen)
+        keepPage = defaults.bool(forKey: Key.openAsKeepPage)
         installedEditors = findEditors()
         let workspace = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {

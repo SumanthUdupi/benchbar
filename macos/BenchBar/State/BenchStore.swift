@@ -138,6 +138,8 @@ final class BenchStore {
     }
 
     @ObservationIgnored let settings: AppSettings
+    /// Pins, recents and sessions of "Open as…" (OpenAsStore).
+    @ObservationIgnored let openAs: OpenAsStore
     @ObservationIgnored var onAlert: ((BenchModel, BenchAlert) -> Void)?
     /// Called after anything that changes what the menu bar shows.
     @ObservationIgnored var onChange: (() -> Void)?
@@ -208,6 +210,7 @@ final class BenchStore {
         now: @escaping () -> Date = Date.init
     ) {
         self.settings = settings
+        self.openAs = OpenAsStore(keepPage: { settings.keepPage })
         self.locator = locator
         self.makeClient = makeClient
         self.pinger = pinger

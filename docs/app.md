@@ -48,6 +48,45 @@ top chooses which bench the popover shows.
 | ⌘F | Open the bench folder |
 | ⌘K | Health in the BenchBar window |
 | ⌘M | The BenchBar window |
+| ⌘0, ⌘1 to ⌘9 | Open the default site as Administrator, or as a pinned user ([Open as a user](#open-as-a-user)) |
+| ⇧⌘O | Switch back to the previous user |
+
+## Open as a user
+
+On a site with `developer_mode` on (its `site_config.json`, else
+`common_site_config.json`), while the bench runs, each site row has a person
+button, in the popover and on the window's Sites tab. It opens the site in
+your browser signed in as another user, with no password. Under the hood it
+runs [`benchbar open --as`](reference/cli/other.md#open); a site without
+`developer_mode`, or whose name has no hosts line, shows no button.
+
+The menu lists:
+
+- **Switch Back to {name}**: the user before this one (⇧⌘O). Switching is a toggle.
+- Your pinned users, as `{label} — {user}` (⌘1 to ⌘9), then **Administrator** (⌘0).
+- **Find User…**: a sheet in the BenchBar window that searches the site's enabled
+  users as you type. **Open** signs in as that user; the pin keeps them in the menu,
+  with a label of your own (for example `NE`). A site keeps nine pins.
+- **Keep the page I'm on**: see below.
+
+The shortcuts work in the popover, for the default site. After a switch the
+site's row reads `as {name}`: the pin's label, else the user's full name, else
+the user id.
+
+The link opens in the browser you used last (Safari, Chrome, Arc, Brave, Edge or
+Firefox), so the session cookie lands where you are testing. Without
+**Keep the page I'm on** it opens a new tab: other tabs of that site keep the old
+user's screen, so reload them. With it on, BenchBar sends the browser's current
+tab for that site to the new user, on the same page. That needs macOS's
+Automation permission, which macOS asks for once per browser when you first use
+it; it is off by default, and Firefox always gets a new tab.
+
+BenchBar keeps the sessions it created in memory, and reuses one while the site
+still says it belongs to that user, so switching back is quick. Quitting BenchBar
+forgets them. Nothing about a session is written to disk or logged. The side
+effects on the site (last login, `on_login` hooks, older sessions of that user
+signed out, restrictions that still apply) are the ones
+[`benchbar open`](reference/cli/other.md#open) lists.
 
 ## Links for Raycast and Shortcuts
 
