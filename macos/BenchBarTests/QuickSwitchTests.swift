@@ -210,6 +210,9 @@ struct QuickSwitchTests {
     @Test func eachCauseOfNothingToSwitchOnHasItsOwnCopy() {
         func bench(running: Bool = true, _ rows: [SiteRow]) -> QuickSwitchBench { QuickSwitchBench(path: self.bench, running: running, rows: rows) }
         #expect(blocker([], loaded: false)?.text == "Loading benches…")
+        #expect(QuickSwitchModel(benches: [], selectedPath: nil, lastSwitchedKey: nil, pins: [:], recents: [:],
+                                 loaded: false, cliAvailable: false).blocker?.text == "The benchbar command line tool is not available.")
+        #expect(blocker([bench([row("second")])])?.text == "frappe-bench has no default site. Make one the default in its Sites tab.")
         #expect(blocker([])?.text == "No bench to open as a user on. Add one in BenchBar.")
         var unknown = row("macdev", developerMode: false, isDefault: true)
         unknown.developerModeKnown = false

@@ -10,14 +10,16 @@ public enum BenchState { Unknown, Stopped, Starting, Running, Crashed, Paused }
 /// A site of a bench (<c>sites[]</c> in <c>status --json</c>). Other fields of the CLI are ignored.
 /// <paramref name="DeveloperMode"/> is false when the CLI is too old to report it, which hides "Open as…".
 /// </summary>
-public sealed record SiteInfo(string Name, bool IsDefault, bool DeveloperMode = false)
+public sealed record SiteInfo(string Name, bool IsDefault, bool DeveloperMode = false, bool? OpenAs = null)
 {
     /// <summary>
     /// "Open as…" works on the default site only: the bench serves its web port with no <c>--site</c>, so the port answers for
     /// the bench's default site whatever Host the browser sends, and a session made in any other site's database
     /// would land logged out.
     /// </summary>
-    public bool CanOpenAs => IsDefault && DeveloperMode;
+    /// <remarks><paramref name="OpenAs"/> is the CLI's own answer (it reads the site the web port serves); the default-site
+    /// rule is the fallback for a CLI older than that field.</remarks>
+    public bool CanOpenAs => OpenAs ?? (IsDefault && DeveloperMode);
 }
 
 /// <summary>
@@ -147,6 +149,7 @@ internal sealed class SiteDto
     [JsonPropertyName("name")] public string? Name { get; set; }
     [JsonPropertyName("default")] public bool? Default { get; set; }
     [JsonPropertyName("developer_mode")] public bool? DeveloperMode { get; set; }
+    [JsonPropertyName("open_as")] public bool? OpenAs { get; set; }
 }
 
 internal sealed class ListDto
@@ -274,7 +277,7 @@ public static class BenchJson
         var name = dto.Name ?? System.IO.Path.GetFileName(path.TrimEnd('/', '\\'));
         var sites = (dto.Sites ?? [])
             .Where(x => !string.IsNullOrEmpty(x.Name))
-            .Select(x => new SiteInfo(x.Name!, x.Default ?? false, x.DeveloperMode ?? false))
+            .Select(x => new SiteInfo(x.Name!, x.Default ?? false, x.DeveloperMode ?? false, x.OpenAs))
             .ToList();
         return new BenchStatus(name, path, ParseState(dto.State), dto.StopReason, dto.WebUrl, dto.Site)
         {

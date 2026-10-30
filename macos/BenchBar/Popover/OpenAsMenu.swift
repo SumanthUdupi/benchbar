@@ -44,7 +44,12 @@ nonisolated enum OpenAsMenuModel {
 
     static func availability(_ row: SiteRow, benchRunning: Bool) -> Availability {
         if row.needsHosts { return .needsHosts }
-        if !row.isDefault { return .notDefaultSite }
+        // the CLI says which site bench serve answers as; BenchBar's default can lag a `bench use` run by hand
+        if row.developerMode, let openAs = row.openAs {
+            if !openAs { return .notDefaultSite }
+        } else if !row.isDefault {
+            return .notDefaultSite
+        }
         if !row.developerModeKnown { return .cliTooOld }
         if !row.developerMode { return .developerModeOff }
         return benchRunning ? .available : .benchStopped

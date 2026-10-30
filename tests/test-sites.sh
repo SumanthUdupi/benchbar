@@ -17,7 +17,7 @@ export MARIADB_ROOT_PASSWORD=rootpw
 run_fm site list --bench-dir "$BENCH"
 assert_contains "$OUT" "v16dev"
 run_fm site list --json --bench-dir "$BENCH"
-assert_eq "[{'name': 'v16dev', 'default': True, 'hosts_entry': True, 'ping_code': None, 'developer_mode': False, 'db_name': '_v16dev', 'db_port': 3306}]" "$(printf '%s' "$OUT" | jget - 'd["sites"]')"
+assert_eq "[{'name': 'v16dev', 'default': True, 'hosts_entry': True, 'ping_code': None, 'developer_mode': False, 'open_as': False, 'db_name': '_v16dev', 'db_port': 3306}]" "$(printf '%s' "$OUT" | jget - 'd["sites"]')"
 # developer_mode: the site's own value wins over common_site_config.json; 1 or true is on
 cp "$BENCH/sites/v16dev/site_config.json" "$TMP_DIR/site_config.json.orig"
 cp "$BENCH/sites/common_site_config.json" "$TMP_DIR/common_site_config.json.orig"
@@ -25,6 +25,8 @@ dev_mode_of() { run_fm "$@" --bench-dir "$BENCH"; printf '%s' "$OUT" | jget - 'd
 printf '{\n "db_name": "_v16dev",\n "developer_mode": 1\n}\n' >"$BENCH/sites/v16dev/site_config.json"
 assert_eq "True" "$(dev_mode_of site list --json)" "(site_config.json developer_mode 1)"
 assert_eq "True" "$(dev_mode_of status --json)" "(status carries it too: the tray reads sites from status)"
+run_fm site list --json --bench-dir "$BENCH"
+assert_eq "True" "$(printf '%s' "$OUT" | jget - 'd["sites"][0]["open_as"]')" "(developer mode on the site bench serve answers as)"
 printf '{\n "db_name": "_v16dev",\n "developer_mode": true\n}\n' >"$BENCH/sites/v16dev/site_config.json"
 assert_eq "True" "$(dev_mode_of site list --json)" "(true)"
 printf '{\n "db_name": "_v16dev",\n "developer_mode": "1"\n}\n' >"$BENCH/sites/v16dev/site_config.json"

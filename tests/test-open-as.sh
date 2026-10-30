@@ -175,9 +175,15 @@ run_fm open --site two.localhost --as priya@example.com --bench-dir "$BENCH"
 assert_eq "0" "$CODE" "$OUT"
 assert_calls_contain '^wslview http://two.localhost:8000/login\?redirect-to=%2Fapp&sid=mocksid0123456789&t=[0-9]+$'
 # WSL: the Windows browser reads Windows' hosts file, so only localhost names are offered
-printf '127.0.0.1 three\n' >>"$FL_HOSTS_FILE"
+printf 'three\n' >>"$MOCK_STATE/hosts_resolve"
+sed_inplace 's/"default_site": "two.localhost"/"default_site": "three"/' "$BENCH/sites/common_site_config.json"
 run_fm open --site three --as priya@example.com --bench-dir "$BENCH"
-assert_eq "1" "$CODE"; assert_contains "$OUT" "three is not a *.localhost name, so the Windows browser cannot reach it from WSL."
+assert_eq "1" "$CODE"; assert_contains "$OUT" "three is not a *.localhost name, so the Windows browser may not reach it from WSL."
+run_fm open --site three --as priya@example.com --print-url --bench-dir "$BENCH"
+assert_eq "0" "$CODE" "(the person opens the link: --print-url is not refused) $OUT"
+run_fm open --site three --no-browser --bench-dir "$BENCH"
+assert_eq "0" "$CODE" "(plain open is not a sign-in) $OUT"
+sed_inplace 's/"default_site": "three"/"default_site": "two.localhost"/' "$BENCH/sites/common_site_config.json"
 printf 'Linux version 6.8.0-45-generic (buildd@lcy02) #45-Ubuntu SMP\n' >"$FL_PROC_VERSION"
 reset_calls
 run_fm open --site two.localhost --as priya@example.com --bench-dir "$BENCH"

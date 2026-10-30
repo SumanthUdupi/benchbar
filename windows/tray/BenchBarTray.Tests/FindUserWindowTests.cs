@@ -134,7 +134,7 @@ public class FindUserWindowTests
         Assert.Equal("Pinned", pin.Content);
         Click(pin, isChecked: false);
 
-        Assert.Equal(FindUserWindow.PinSaveFailedText, window.FooterText);
+        Assert.Equal(FindUserWindow.UnpinSaveFailedText, window.FooterText);
         Assert.True(window.FooterIsError);
     });
 }

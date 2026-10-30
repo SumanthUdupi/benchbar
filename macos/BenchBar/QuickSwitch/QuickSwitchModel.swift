@@ -89,7 +89,9 @@ nonisolated struct QuickSwitchModel: Equatable, Sendable {
     /// Why there is nothing to switch on, each with its own fix.
     enum Blocker: Equatable, Sendable {
         case loading
+        case noCLI
         case noBench
+        case noDefaultSite(bench: String)
         case cliTooOld
         case developerModeOff(site: String)
         case hostsMissing(site: String)
@@ -98,7 +100,9 @@ nonisolated struct QuickSwitchModel: Equatable, Sendable {
         var text: String {
             switch self {
             case .loading: "Loading benches…"
+            case .noCLI: "The benchbar command line tool is not available."
             case .noBench: "No bench to open as a user on. Add one in BenchBar."
+            case .noDefaultSite(let bench): "\(bench) has no default site. Make one the default in its Sites tab."
             case .cliTooOld: "Update the benchbar CLI to use Open as"
             case .developerModeOff(let site): "Turn on developer_mode for \(site)"
             case .hostsMissing(let site): "Add the hosts line for \(site) in the BenchBar window"
@@ -151,7 +155,8 @@ nonisolated struct QuickSwitchModel: Equatable, Sendable {
     /// Why there is nothing to switch on. A stopped bench whose default site
     /// is ready is fixed by starting it; otherwise the first default site's
     /// own problem is named.
-    static func blocker(benches: [QuickSwitchBench], loaded: Bool, selectedPath: String?) -> Blocker {
+    static func blocker(benches: [QuickSwitchBench], loaded: Bool, selectedPath: String?, cliAvailable: Bool = true) -> Blocker {
+        if !cliAvailable { return .noCLI }
         if !loaded { return .loading }
         let ordered = benches.filter { $0.path == selectedPath } + benches.filter { $0.path != selectedPath }
         let defaults = ordered.map { (bench: $0, row: $0.rows.first(where: \.isDefault)) }
@@ -161,6 +166,7 @@ nonisolated struct QuickSwitchModel: Equatable, Sendable {
         }) {
             return .benchStopped(bench: stopped.bench.name)
         }
+        if defaults.allSatisfy({ $0.row == nil }) { return .noDefaultSite(bench: defaults[0].bench.name) }
         if defaults.allSatisfy({ $0.row?.developerModeKnown != true }) { return .cliTooOld }
         if let row = defaults.compactMap(\.row).first(where: { $0.developerMode && $0.needsHosts }) {
             return .hostsMissing(site: row.name)
@@ -174,9 +180,10 @@ nonisolated struct QuickSwitchModel: Equatable, Sendable {
     /// default site, opens.
     /// `loaded` is false until the bench list first arrived.
     init(benches: [QuickSwitchBench], selectedPath: String?, lastSwitchedKey: String?,
-         pins: [String: [PinnedUser]], recents: [String: [RecentUser]], loaded: Bool = true) {
+         pins: [String: [PinnedUser]], recents: [String: [RecentUser]], loaded: Bool = true, cliAvailable: Bool = true) {
         targets = Self.targets(benches: benches, selectedPath: selectedPath)
-        blocker = targets.isEmpty ? Self.blocker(benches: benches, loaded: loaded, selectedPath: selectedPath) : nil
+        blocker = targets.isEmpty
+            ? Self.blocker(benches: benches, loaded: loaded, selectedPath: selectedPath, cliAvailable: cliAvailable) : nil
         pinsBySite = pins
         recentsBySite = recents
         siteIndex = targets.firstIndex { $0.id == lastSwitchedKey } ?? 0

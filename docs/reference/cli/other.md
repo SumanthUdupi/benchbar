@@ -216,10 +216,14 @@ else `common_site_config.json`), for Administrator too, only while the bench
 runs, and only on the site the web process answers as: `bench serve` serves
 the `default_site` of `common_site_config.json` for every name, so on a
 bench with one that is the only site you can sign in on
-(`benchbar site default NAME`, then `benchrestart`, moves it). Inside WSL
-the browser is Windows', which reads its own hosts file, so the site must
-be a `*.localhost` name. Plain `open` (no `--as`) needs the bench running
-and a name the browser can reach as well. It starts a Frappe session for the user the way
+(`benchbar site default NAME`, then `benchrestart`, moves it;
+`site list --json` says where it works in `open_as`). Inside WSL the
+browser is Windows', which reads its own hosts file, so `--as` opens only a
+`*.localhost` name itself; for another name add it to the Windows hosts
+file and open the `--print-url` link. Plain `open` (no `--as`) needs the
+bench running and a name the browser can reach as well.
+
+`--as` starts a Frappe session for the user the way
 `bench browse --user` does and opens `/login?redirect-to=PATH&sid=…`;
 frappe sets the cookie and sends the browser on to PATH, so the session id
 does not stay in the address bar. It stays in the browser's history and the

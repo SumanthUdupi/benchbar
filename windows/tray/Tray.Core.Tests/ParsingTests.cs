@@ -159,6 +159,20 @@ public class ParsingTests
     }
 
     [Fact]
+    public void OpenAsFromTheCliWinsOverTheDefaultFlag()
+    {
+        // a hand-run `bench use` moves the site bench serve answers as; status still marks BenchBar's default
+        var status = BenchJson.ParseStatus("""
+            {"bench":"/b","sites":[
+              {"name":"old.localhost","default":true,"developer_mode":true,"open_as":false},
+              {"name":"new.localhost","default":false,"developer_mode":true,"open_as":true}]}
+            """);
+        Assert.Equal(["new.localhost"], status.Sites.Where(s => s.CanOpenAs).Select(s => s.Name));
+        var old = BenchJson.ParseStatus("""{"bench":"/b","sites":[{"name":"a.localhost","default":true,"developer_mode":true}]}""");
+        Assert.True(Assert.Single(old.Sites).CanOpenAs);
+    }
+
+    [Fact]
     public void OpenAsResultParsesTheRecordedDocument()
     {
         var result = BenchJson.ParseOpenAs(File.ReadAllText(Path.Combine(Fixtures.Dir("recorded"), "open-as.json")));

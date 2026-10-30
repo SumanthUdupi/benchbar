@@ -83,7 +83,7 @@ final class QuickSwitchController {
         let benches = store.benches.map { QuickSwitchBench(path: $0.path, running: $0.state == .running, rows: $0.siteRows) }
         return QuickSwitchModel(benches: benches, selectedPath: store.selected?.path, lastSwitchedKey: lastSwitchedKey,
                                 pins: store.openAs.pins, recents: store.openAs.recentsBySite,
-                                loaded: store.hasLoadedBenches || store.cliClient == nil)
+                                loaded: store.hasLoadedBenches, cliAvailable: store.cliClient != nil)
     }
 
     private func show() {

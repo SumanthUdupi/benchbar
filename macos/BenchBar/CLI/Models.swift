@@ -51,6 +51,9 @@ nonisolated struct SiteInfo: Codable, Sendable, Equatable, Hashable, Identifiabl
     var pingCode: Int?
     /// Added with Open as; nil from an older CLI, which hides the menu.
     var developerMode: Bool? = nil
+    /// Whether `open --as` will sign in here (developer mode, and the site
+    /// bench serve answers as); nil from a CLI older than the field.
+    var openAs: Bool? = nil
 
     var id: String { name }
 
@@ -60,6 +63,7 @@ nonisolated struct SiteInfo: Codable, Sendable, Equatable, Hashable, Identifiabl
         case hostsEntry = "hosts_entry"
         case pingCode = "ping_code"
         case developerMode = "developer_mode"
+        case openAs = "open_as"
     }
 }
 

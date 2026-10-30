@@ -431,6 +431,20 @@ struct OpenAsTests {
         #expect(!OpenAsMenuModel.isAvailable(second, benchRunning: true))
         #expect(OpenAsMenuModel.availability(second, benchRunning: true) == .notDefaultSite)
         #expect(OpenAsMenuModel.notDefaultSiteHelp == "Open as works on the default site; port 8000 serves only it")
+        // the CLI's open_as wins over BenchBar's default flag, which a hand-run `bench use` leaves behind
+        var served = second
+        served.openAs = true
+        #expect(OpenAsMenuModel.availability(served, benchRunning: true) == .available)
+        var stale = SiteRow(name: "macdev", isDefault: true, url: siteURL, needsHosts: false, developerMode: true)
+        stale.openAs = false
+        #expect(OpenAsMenuModel.availability(stale, benchRunning: true) == .notDefaultSite)
+    }
+
+    @Test func openAsDecodesAndAnOlderCLIGivesNil() throws {
+        let fresh = try JSONDecoder().decode(SiteInfo.self, from: Data(#"{"name":"m","default":true,"hosts_entry":true,"ping_code":null,"developer_mode":true,"open_as":true}"#.utf8))
+        #expect(fresh.openAs == true)
+        let old = try JSONDecoder().decode(SiteInfo.self, from: Data(#"{"name":"m","default":true,"hosts_entry":true,"ping_code":null}"#.utf8))
+        #expect(old.openAs == nil)
     }
 
     @Test func eachReasonTheControlIsDisabledHasItsOwnHelpText() {
@@ -557,6 +571,9 @@ struct OpenAsTests {
         #expect(BrowserRouter.browser(testing: BrowserRouter.safari, running: running) == chrome, "the tested one has quit")
         #expect(BrowserRouter.browser(testing: nil, running: ["com.apple.finder"]) == nil)
         #expect(BrowserRouter.browser(testing: nil, running: [BrowserRouter.firefox, BrowserRouter.safari]) == BrowserRouter.safari)
+        // the default browser wins over another one left running in the background
+        #expect(BrowserRouter.browser(testing: nil, running: [chrome, BrowserRouter.safari], defaultBrowser: chrome) == chrome)
+        #expect(BrowserRouter.browser(testing: nil, running: [BrowserRouter.safari], defaultBrowser: chrome) == BrowserRouter.safari)
     }
 
     @Test func theBrowserNoteNamesTheBrowserAndTheSettingsPath() {

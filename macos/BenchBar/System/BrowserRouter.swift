@@ -89,7 +89,7 @@ final class BrowserRouter: BrowserOpening {
 
     /// The testing browser, only while it runs: `tell application` would launch it.
     private var runningTestingBrowser: String? {
-        Self.browser(testing: testingBrowser, running: Set(Self.supported.filter(isRunning)))
+        Self.browser(testing: testingBrowser, running: Set(Self.supported.filter(isRunning)), defaultBrowser: Self.defaultBrowserID())
     }
 
     private func isRunning(_ bundleID: String) -> Bool {
@@ -117,9 +117,19 @@ final class BrowserRouter: BrowserOpening {
 
     /// The browser a switch uses: the one tested last while it runs, else the
     /// first supported one that runs (in `supported` order), else nil for the default browser.
-    nonisolated static func browser(testing: String?, running: Set<String>) -> String? {
+    /// The tested browser while it runs, else the default browser if it runs,
+    /// else the first supported one that runs: a Safari left open in the
+    /// background must not win over a Chrome the person set as default.
+    nonisolated static func browser(testing: String?, running: Set<String>, defaultBrowser: String? = nil) -> String? {
         if let testing, running.contains(testing) { return testing }
+        if let defaultBrowser, running.contains(defaultBrowser) { return defaultBrowser }
         return supported.first(where: running.contains)
+    }
+
+    nonisolated static func defaultBrowserID() -> String? {
+        guard let probe = URL(string: "http://example.com"),
+              let app = NSWorkspace.shared.urlForApplication(toOpen: probe) else { return nil }
+        return Bundle(url: app)?.bundleIdentifier
     }
 
     nonisolated static func displayName(_ bundleID: String) -> String {

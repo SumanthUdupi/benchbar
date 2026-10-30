@@ -99,11 +99,11 @@ try:
         "roles": roles.get(u.name, [])[:5], "role_count": len(roles.get(u.name, [])),
         "last_login": str(u.last_login) if u.last_login else None} for u in rows]
     if mode == "json":
-        print("BENCHBAR-RESULT " + json.dumps({"users": users, "truncated": more}), flush=True)
+        print("\nBENCHBAR-RESULT " + json.dumps({"users": users, "truncated": more}), flush=True)
     else:
-        print("BENCHBAR-RESULT " + ("1" if more else "0"), flush=True)
+        print("\nBENCHBAR-RESULT " + ("1" if more else "0"), flush=True)
         for u in users:
-            print("BENCHBAR-RESULT " + "\t".join(" ".join(str(v).split()) for v in
+            print("\nBENCHBAR-RESULT " + "\t".join(" ".join(str(v).split()) for v in
                 (u["name"], u["full_name"], u["user_type"], ", ".join(u["roles"])
                  + (" +" + str(u["role_count"] - 5) if u["role_count"] > 5 else ""))), flush=True)
 finally:
@@ -169,9 +169,6 @@ fl_open_as_require_reachable() {
   if [[ -z "$(fl_port_listener_pid "$FL_WEB_PORT")" || -z "$(fl_port_listener_pid "$FL_REDIS_CACHE_PORT")" ]]; then
     fl_die "The bench is not running." "Start it first: benchup"
   fi
-  if [[ "$1" != localhost && "$1" != *.localhost ]] && declare -F fl_is_wsl >/dev/null && fl_is_wsl; then
-    fl_die "$1 is not a *.localhost name, so the Windows browser cannot reach it from WSL." "Use a site named NAME.localhost, or add it to the Windows hosts file and use --print-url"
-  fi
   if [[ "$1" != localhost && "$1" != *.localhost ]] && ! fl_hosts_has_name "$1"; then
     fl_die "$1 has no hosts line, so the browser cannot reach it." "Add it: benchbar site hosts"
   fi
@@ -209,6 +206,12 @@ fl_cmd_open() {
   fl_open_as_require_reachable "$site"
   if [[ -n "$user" ]]; then
     fl_open_as_require_served "$site"
+    # in WSL wslview opens a Windows browser, which reads Windows' hosts file, not the distro's;
+    # with --print-url or --no-browser the person (or the tray) opens the link and knows the name
+    if [[ "$browser" == 1 && "$site" != localhost && "$site" != *.localhost ]] && declare -F fl_is_wsl >/dev/null && fl_is_wsl; then
+      fl_die "$site is not a *.localhost name, so the Windows browser may not reach it from WSL." \
+        "Use a site named NAME.localhost, or add $site to the Windows hosts file and open the link yourself: benchbar open --as USER --print-url"
+    fi
     fl_site_developer_mode "$site" \
       || fl_die "${site} is not in developer mode, so benchbar will not sign in as another user." "On a development site: bench --site ${site} set-config developer_mode 1"
     [[ "$user" != "Guest" ]] || fl_die "Guest has no session to open." "Open the site without --as instead."

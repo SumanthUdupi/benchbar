@@ -41,6 +41,7 @@ internal sealed class FindUserWindow : ToolWindow
     public const string TruncatedText = "Showing the first 50; refine the search";
     public const string PinLimitText = "A site can pin at most 9 users.";
     public const string PinSaveFailedText = "Could not save your pins to config.json; they will be gone after a restart.";
+    public const string UnpinSaveFailedText = "Could not save your pins to config.json; this user will be back after a restart.";
     public const string LabelHint = "Label, e.g. NE";
 
     private static readonly Brush ErrorBrush = Frozen(new SolidColorBrush(Color.FromRgb(0xE5, 0x48, 0x4D)));
@@ -199,7 +200,7 @@ internal sealed class FindUserWindow : ToolWindow
             }
             else
             {
-                if (!_actions.Unpin(user.Name)) SetFooter(PinSaveFailedText, error: true);
+                if (!_actions.Unpin(user.Name)) SetFooter(UnpinSaveFailedText, error: true);
                 pin.Content = "Pin";
                 labelHost.Visibility = Visibility.Collapsed;
             }

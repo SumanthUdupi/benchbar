@@ -160,7 +160,7 @@ Left click opens the flyout, one row per bench:
   **1** to **9** switch to your pinned users at once while the search box is
   empty (or only spaces); **0** is Administrator. Switch Back has no digit,
   so a pin keeps its number whether or not Switch Back shows. **Tab** moves
-  to the next developer-mode site.
+  to the next bench whose served site is in developer mode.
   Typing filters the rows by label, user id or full name; from 2 characters
   it also searches the site's users and lists up to 8 under "Other users".
   The first row is selected, so Ctrl+Alt+U then Enter toggles between your

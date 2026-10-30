@@ -110,7 +110,11 @@ struct QuickSwitchView: View {
         .onAppear { typing = true }
         .onChange(of: model.isSwitching) { _, switching in
             // a disabled field loses focus; a failed switch leaves the user to retry by typing
-            if !switching { typing = true }
+            if !switching { refocus() }
+        }
+        .onChange(of: model.blocker == nil) { _, available in
+            // a refresh that turns "Start … first" into a list creates the field after onAppear ran
+            if available { refocus() }
         }
         .onChange(of: model.errorMessage) { _, message in
             if let message { Self.announce(message) }
@@ -217,6 +221,13 @@ struct QuickSwitchView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.spokenLabel)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// Focus set in the same update that enables or creates the field is
+    /// dropped, so it is set again on the next turn of the run loop.
+    private func refocus() {
+        typing = false
+        DispatchQueue.main.async { typing = true }
     }
 
     private static func announce(_ text: String) {
