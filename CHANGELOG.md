@@ -15,6 +15,13 @@ All notable changes to this project are documented here.
   for picking one to open as (`--search`, `--limit`, `--json`).
 - `site list --json` and `status --json` give each site's
   `developer_mode`.
+- The app: an **Open as…** menu on each site in the popover and the
+  Sites tab. Switch Back (⇧⌘O), up to nine pinned users with your own
+  labels (⌘1–⌘9), Administrator (⌘0) and Find User…. Switching back to
+  a user you used before is instant. **Keep the page I'm on** (Settings,
+  off by default) keeps the browser on the same document as the new user.
+- The Windows tray: the same **Open as…** menu beside Open site, with a
+  Find User window; pinned users are kept in `config.json`.
 
 ## 0.8.0 - 2026-10-30
 
