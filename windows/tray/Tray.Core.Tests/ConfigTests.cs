@@ -147,6 +147,33 @@ public class ConfigTests : IDisposable
     }
 
     [Fact]
+    public void QuickSwitchIsOnWhenTheKeyIsAbsentAndOffOnlyWhenFalse()
+    {
+        Assert.True(TrayConfig.Load(ConfigPath).QuickSwitch);
+        Write("""{"tray":{"appearance":"dark"}}""");
+        Assert.True(TrayConfig.Load(ConfigPath).QuickSwitch);
+        Write("""{"tray":{"quick_switch":"no"}}""");
+        Assert.True(TrayConfig.Load(ConfigPath).QuickSwitch);
+        Write("""{"tray":{"quick_switch":false}}""");
+        Assert.False(TrayConfig.Load(ConfigPath).QuickSwitch);
+    }
+
+    [Fact]
+    public void QuickSwitchRoundTripsAndSaveKeepsTheOtherKeys()
+    {
+        Write("""{"distro":"Ubuntu","tray":{"quick_switch":true,"later":"yes"}}""");
+        var config = TrayConfig.Load(ConfigPath);
+        config.QuickSwitch = false;
+        config.Save();
+
+        var root = Read();
+        Assert.False(root["tray"]!["quick_switch"]!.GetValue<bool>());
+        Assert.Equal("yes", (string?)root["tray"]!["later"]);
+        Assert.Equal("Ubuntu", (string?)root["distro"]);
+        Assert.False(TrayConfig.Load(ConfigPath).QuickSwitch);
+    }
+
+    [Fact]
     public void ARoundTripGivesTheSameSettings()
     {
         var config = TrayConfig.Load(ConfigPath);

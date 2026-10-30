@@ -11,7 +11,7 @@ public sealed record PinnedUser(string User, string? Label);
 
 /// <summary>
 /// <c>%LOCALAPPDATA%\BenchBar\config.json</c>, shared with the shim. The shim owns <c>distro</c> and <c>cli_path</c>;
-/// the tray owns a <c>tray</c> object (<c>appearance</c>, <c>runner</c>, <c>notifications</c>, <c>open_as_pins</c>). Save re-reads the file
+/// the tray owns a <c>tray</c> object (<c>appearance</c>, <c>runner</c>, <c>notifications</c>, <c>quick_switch</c>, <c>open_as_pins</c>). Save re-reads the file
 /// from disk and replaces only the <c>tray</c> object, so whatever the shim wrote since the tray started
 /// (<c>adopt-distro</c> sets <c>distro</c>) is never reverted; the write is atomic. <see cref="Distro"/> is read from
 /// the file again whenever its write time changes. Read with <see cref="JsonNode"/>, so no reflection serializer is needed.
@@ -69,6 +69,9 @@ public sealed class TrayConfig
     public string RunnerId { get; set; } = DefaultRunnerId;
 
     public bool Notifications { get; set; } = true;
+
+    /// <summary>The Ctrl+Alt+U Quick Switch hotkey. On when the key is absent.</summary>
+    public bool QuickSwitch { get; set; } = true;
 
     /// <summary>Pinned users by <see cref="PinKey"/>. Only the owner's labels and user ids: never a session.</summary>
     public Dictionary<string, List<PinnedUser>> OpenAsPins { get; } = new(StringComparer.Ordinal);
@@ -139,6 +142,7 @@ public sealed class TrayConfig
             config.Appearance = ParseAppearance(ReadString(tray, "appearance"));
             config.RunnerId = ReadString(tray, "runner") is { Length: > 0 } id ? id : DefaultRunnerId;
             if (tray["notifications"] is JsonValue v && v.TryGetValue<bool>(out var on)) config.Notifications = on;
+            if (tray["quick_switch"] is JsonValue q && q.TryGetValue<bool>(out var quick)) config.QuickSwitch = quick;
             if (tray["open_as_pins"] is JsonObject pins) config.ReadPins(pins);
         }
         return config;
@@ -199,6 +203,7 @@ public sealed class TrayConfig
         tray["appearance"] = AppearanceText(Appearance);
         tray["runner"] = RunnerId;
         tray["notifications"] = Notifications;
+        tray["quick_switch"] = QuickSwitch;
         if (OpenAsPins.Count > 0) tray["open_as_pins"] = PinsToJson();
         else tray.Remove("open_as_pins");
         root["tray"] = tray;

@@ -147,14 +147,31 @@ Left click opens the flyout, one row per bench:
   for what it changes on the site (last login, login hooks, older
   sessions of that user ending).
 
+- **Quick Switch** (Ctrl+Alt+U, from any app): a small panel in the middle
+  of the screen your mouse is on, with no mouse needed. The title is
+  `Open {site} as…`; the rows are **Switch Back to {label}**, your pinned
+  users and Administrator, and the current user carries a check mark and
+  "current". Up and Down move (wrapping), **Enter** switches, **Esc** or a
+  click elsewhere closes it, **1** to **9** and **0** switch at once while the
+  search box is empty, and **Tab** moves to the next developer-mode site.
+  Typing filters the rows by label, user id or full name; from 2 characters
+  it also searches the site's users and lists up to 8 under "Other users".
+  The first row is selected, so Ctrl+Alt+U then Enter toggles between your
+  last two users. The site is the one you last switched on, else the bench's
+  default site. With no developer-mode site the panel says so, and while the
+  distro is stopped it says that and runs nothing. Turn it off, and see
+  whether another app already owns the key, in the tray menu under
+  **Quick Switch: Ctrl+Alt+U**. It uses Windows' own hotkey registration, so
+  no keyboard hook and no permission prompt are involved.
+
 Esc closes the flyout, Enter on a row opens the site.
 
 ![The tray flyout in dark mode](images/windows-flyout-dark.png)
 
 Right click opens the menu: Open BenchBar at logon (a shortcut in your
 Startup folder, no admin needed), Appearance (System, Light or Dark),
-Runner (the built in Bench and Coffee cup, and your own), Check for
-Updates, Help, Report a Bug and Quit.
+Runner (the built in Bench and Coffee cup, and your own), Notifications,
+Quick Switch, Check for Updates, Help, Report a Bug and Quit.
 
 When a bench crashes, is paused by the crash guard or meets a port
 conflict, the tray shows one Windows notification with the bench and
@@ -174,7 +191,8 @@ tray from waking a distro that WSL shut down after its idle time.
 The tray keeps its settings under a `tray` key in
 `%LOCALAPPDATA%\BenchBar\config.json`, the file `benchbar.exe` uses for
 the distro. Pinned "Open as…" users (user ids and your labels, never a
-session) are in `tray.open_as_pins`. Custom runners go in `%LOCALAPPDATA%\BenchBar\runners\<id>\`,
+session) are in `tray.open_as_pins`. The Quick Switch on/off setting is
+`tray.quick_switch` (on when absent). Custom runners go in `%LOCALAPPDATA%\BenchBar\runners\<id>\`,
 in the format of [Custom runners](runners.md); the frames are scaled to
 the notification area's square slot.
 

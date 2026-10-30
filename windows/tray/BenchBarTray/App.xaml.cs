@@ -37,6 +37,10 @@ public partial class App : Application, ITrayHost
     private IDistroProbe? _probe;
     private HttpClient? _openAsHttp;
     private OpenAsService? _openAsService;
+    private HotKey? _hotKey;
+    private bool _quickSwitchTaken;
+    private QuickSwitchWindow? _quickSwitch;
+    private (string BenchPath, string Site)? _lastQuickSwitch;
     private static readonly TimeSpan FlyoutKeepAlive = TimeSpan.FromSeconds(30);
     private readonly System.Windows.Threading.DispatcherTimer _releaseFlyout = new(System.Windows.Threading.DispatcherPriority.Background) { Interval = FlyoutKeepAlive };
     private long _flyoutHiddenAt;
@@ -114,6 +118,7 @@ public partial class App : Application, ITrayHost
 
         _releaseFlyout.Tick += (_, _) => ReleaseFlyout();
         _controller.Start();
+        ApplyQuickSwitch();
     }
 
     // --- single instance ---
@@ -311,11 +316,12 @@ public partial class App : Application, ITrayHost
         return null;
     }
 
-    private Task<(UserList? Users, string? Error)> FindUsersAsync(BenchStatus bench, string site, string? text, CancellationToken ct)
+    private Task<(UserList? Users, string? Error)> FindUsersAsync(
+        BenchStatus bench, string site, string? text, CancellationToken ct, int limit = OpenAsService.UserListLimit)
     {
         if (OpenAsSvc is not { } service) return Task.FromResult<(UserList?, string?)>((null, "BenchBar is not ready."));
         if (_controller?.Snapshot.DistroStopped == true) return Task.FromResult<(UserList?, string?)>((null, DistroStoppedMessage));
-        return service.FindUsersAsync(bench, site, text, ct);
+        return service.FindUsersAsync(bench, site, text, ct, limit);
     }
 
     private void ShowFindUser(BenchStatus bench, string site)
@@ -352,6 +358,92 @@ public partial class App : Application, ITrayHost
         };
         Awake(true);
         window.Show();
+    }
+
+    // --- Quick Switch ---
+
+    /// <summary>
+    /// Registers Ctrl+Alt+U when the setting is on and drops it when off. A key another app owns leaves the feature off with
+    /// a note in the menu; the next toggle of the setting tries again.
+    /// </summary>
+    private void ApplyQuickSwitch()
+    {
+        if (_quitting) return;
+        if (!_config.QuickSwitch)
+        {
+            _hotKey?.Dispose();
+            _hotKey = null;
+            _quickSwitchTaken = false;
+            _quickSwitch?.Close();
+            return;
+        }
+        if (_hotKey is { IsRegistered: true }) return;
+        _hotKey?.Dispose();
+        var key = new HotKey(() => Dispatcher.BeginInvoke(ShowQuickSwitch));
+        try
+        {
+            _quickSwitchTaken = !key.TryRegister();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            _log.Write("quick-switch", ex);
+            _quickSwitchTaken = true;
+        }
+        if (_quickSwitchTaken)
+        {
+            key.Dispose();
+            _hotKey = null;
+            return;
+        }
+        _hotKey = key;
+    }
+
+    private void ShowQuickSwitch()
+    {
+        if (_quitting || _controller is null) return;
+        if (_quickSwitch is not null)
+        {
+            _quickSwitch.Close();
+            return;
+        }
+        var snapshot = _controller.Snapshot;
+        var target = QuickSwitchModel.Choose(snapshot.Benches, snapshot.DistroStopped, _lastQuickSwitch);
+        var service = OpenAsSvc;
+        var data = QuickSwitchData.Empty;
+        QuickSwitchActions actions = new();
+        if (target.Bench is { } bench && service is not null)
+        {
+            data = new QuickSwitchData(
+                site => _config.PinsFor(bench.Path, site),
+                site => service.CurrentUser(bench.Path, site),
+                site => service.PreviousUser(bench.Path, site),
+                (site, user) => service.LabelFor(bench.Path, site, user, _config.PinsFor(bench.Path, site)),
+                (site, user) => service.FullNameOf(bench.Path, site, user));
+            actions = new QuickSwitchActions
+            {
+                Find = (site, text, ct) => FindUsersAsync(bench, site, text, ct, QuickSwitchModel.SearchLimit),
+                Switch = async (site, user) =>
+                {
+                    var error = await SwitchUserAsync(bench, site, user);
+                    if (error is null) _lastQuickSwitch = (bench.Path, site);
+                    return error;
+                },
+            };
+        }
+        else if (target.State == QuickSwitchState.Ready)
+        {
+            target = new QuickSwitchTarget(QuickSwitchState.BenchStopped, null, [], null);
+        }
+
+        var window = new QuickSwitchWindow(target, data, actions, Theme);
+        _quickSwitch = window;
+        window.Closed += (_, _) =>
+        {
+            _quickSwitch = null;
+            Awake(false);
+        };
+        Awake(true);
+        window.ShowCentered();
     }
 
     private VsCodeOutcome OpenVsCode(BenchStatus bench)
@@ -463,6 +555,14 @@ public partial class App : Application, ITrayHost
             SaveConfig();
             if (_controller is not null) _controller.Notifications = on;
         },
+        QuickSwitch = () => _config.QuickSwitch,
+        QuickSwitchTaken = () => _quickSwitchTaken,
+        SetQuickSwitch = on =>
+        {
+            _config.QuickSwitch = on;
+            SaveConfig();
+            ApplyQuickSwitch();
+        },
         Theme = () => Theme,
         CheckForUpdates = () => _ = CheckForUpdatesAsync(),
         Help = () => OpenUrl(HelpUrl),
@@ -573,6 +673,9 @@ public partial class App : Application, ITrayHost
         if (_quitting) return;
         _quitting = true;
         _controller?.Dispose();
+        _hotKey?.Dispose(); // UnregisterHotKey
+        _hotKey = null;
+        _quickSwitch?.Close();
         _flyout?.Close();
         foreach (var w in _logs.Values.ToList()) w.Close();
         foreach (var w in _doctors.Values.ToList()) w.Close();

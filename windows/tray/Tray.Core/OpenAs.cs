@@ -87,15 +87,15 @@ public sealed class OpenAsService(
         }
     }
 
-    /// <summary>The enabled users of <paramref name="site"/> matching <paramref name="search"/> (id or full name), at most <see cref="UserListLimit"/>.</summary>
+    /// <summary>The enabled users of <paramref name="site"/> matching <paramref name="search"/> (id or full name), at most <paramref name="limit"/>.</summary>
     public async Task<(UserList? Users, string? Error)> FindUsersAsync(
-        BenchStatus bench, string site, string? search, CancellationToken ct)
+        BenchStatus bench, string site, string? search, CancellationToken ct, int limit = UserListLimit)
     {
         if (bench.State != BenchState.Running) return (null, NotRunningMessage);
 
         List<string> args = ["users", "--bench-dir", bench.Path, "--site", site];
         if (!string.IsNullOrWhiteSpace(search)) args.AddRange(["--search", search.Trim()]);
-        args.AddRange(["--limit", UserListLimit.ToString(CultureInfo.InvariantCulture), "--json"]);
+        args.AddRange(["--limit", limit.ToString(CultureInfo.InvariantCulture), "--json"]);
         try
         {
             var list = BenchJson.ParseUsers(await source.RunForOutputAsync([.. args], ct).ConfigureAwait(false));
@@ -123,6 +123,12 @@ public sealed class OpenAsService(
 
     /// <summary>The user before <see cref="CurrentUser"/>: what "Switch Back" goes to.</summary>
     public string? PreviousUser(string benchPath, string site) => RecentAt(benchPath, site, 1);
+
+    /// <summary>The full name this service has seen for <paramref name="user"/> on this site, or null.</summary>
+    public string? FullNameOf(string benchPath, string site, string user)
+    {
+        lock (_gate) return _fullNames.TryGetValue(UserKey(benchPath, site, user), out var name) ? name : null;
+    }
 
     /// <summary>The pin label, else the full name this service has seen, else the user id.</summary>
     public string LabelFor(string benchPath, string site, string user, IReadOnlyList<PinnedUser> pins)
