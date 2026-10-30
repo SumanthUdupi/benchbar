@@ -148,4 +148,59 @@ public class ParsingTests
         }
     }
 
+    [Fact]
+    public void DeveloperModeParsesPerSiteAndAnOlderCliGivesFalse()
+    {
+        var status = BenchJson.ParseStatus(File.ReadAllText(Path.Combine(Fixtures.Dir("recorded"), "status.json")));
+        Assert.Equal([true, false], status.Sites.Select(s => s.DeveloperMode));
+
+        var old = BenchJson.ParseStatus("""{"bench":"/b","sites":[{"name":"a.localhost","default":true}]}""");
+        Assert.False(Assert.Single(old.Sites).DeveloperMode);
+    }
+
+    [Fact]
+    public void OpenAsResultParsesTheRecordedDocument()
+    {
+        var result = BenchJson.ParseOpenAs(File.ReadAllText(Path.Combine(Fixtures.Dir("recorded"), "open-as.json")));
+        Assert.Equal("linuxdev.localhost", result.Site);
+        Assert.Equal("priya@example.com", result.User);
+        Assert.Equal("Priya Nair", result.FullName);
+        Assert.Equal("System User", result.UserType);
+        Assert.Equal("/app", result.Path);
+        Assert.StartsWith("http://linuxdev.localhost:8000/login?redirect-to=%2Fapp&sid=", result.Url);
+    }
+
+    [Fact]
+    public void OpenAsWithoutAUrlHasNullUrlAndWithoutAUserIsMalformed()
+    {
+        Assert.Null(BenchJson.ParseOpenAs("""{"user":"a@b.c","path":"/"}""").Url);
+        Assert.ThrowsAny<JsonException>(() => BenchJson.ParseOpenAs("{}"));
+    }
+
+    [Fact]
+    public void UsersParseWithRolesAndTruncation()
+    {
+        var list = BenchJson.ParseUsers(File.ReadAllText(Path.Combine(Fixtures.Dir("recorded"), "users.json")));
+        Assert.Equal("linuxdev.localhost", list.Site);
+        Assert.False(list.Truncated);
+        Assert.Equal(["Administrator", "priya@example.com", "visitor@example.com"], list.Users.Select(u => u.Name));
+        var priya = list.Users[1];
+        Assert.Equal(5, priya.Roles.Count);
+        Assert.Equal(7, priya.RoleCount);
+        Assert.Null(priya.LastLogin);
+        Assert.Equal("Website User", list.Users[2].UserType);
+
+        var cut = BenchJson.ParseUsers("""{"users":[{"name":"a"},{"full_name":"no name"}],"truncated":true}""");
+        Assert.True(cut.Truncated);
+        Assert.Equal("a", Assert.Single(cut.Users).Name);
+    }
+
+    [Fact]
+    public async Task FixtureSourceAnswersOpenAndUsersFromItsFilesAndRefusesOtherCommands()
+    {
+        var source = new FixtureBenchSource(Fixtures.Dir("recorded"));
+        Assert.Contains("\"user\"", await source.RunForOutputAsync(["open", "--as", "x"], Ct));
+        Assert.Contains("\"users\"", await source.RunForOutputAsync(["users"], Ct));
+        await Assert.ThrowsAsync<CliProblemException>(() => source.RunForOutputAsync(["doctor"], Ct));
+    }
 }

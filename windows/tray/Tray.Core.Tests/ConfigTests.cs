@@ -82,6 +82,71 @@ public class ConfigTests : IDisposable
     }
 
     [Fact]
+    public void PinsRoundTripAndEveryUnknownKeyAroundThemSurvives()
+    {
+        Write("""
+            {"distro":"Ubuntu","tray":{"later":"yes","open_as_pins":{
+              "/b|a.localhost":[{"user":"priya@example.com","label":"NE"},{"user":"rahul@example.com","label":null}]}}}
+            """);
+        var config = TrayConfig.Load(ConfigPath);
+        Assert.Equal(
+            [new PinnedUser("priya@example.com", "NE"), new PinnedUser("rahul@example.com", null)],
+            config.PinsFor("/b", "a.localhost"));
+        Assert.Empty(config.PinsFor("/b", "other.localhost"));
+
+        Assert.True(config.TryPin("/b", "a.localhost", "arun@example.com", "  Tech "));
+        Assert.True(config.TryPin("/b", "a.localhost", "rahul@example.com", "CS"));
+        config.Save();
+
+        var root = Read();
+        Assert.Equal("Ubuntu", (string?)root["distro"]);
+        var tray = root["tray"]!.AsObject();
+        Assert.Equal("yes", (string?)tray["later"]);
+        var saved = tray["open_as_pins"]!["/b|a.localhost"]!.AsArray();
+        Assert.Equal(["priya@example.com", "rahul@example.com", "arun@example.com"], saved.Select(p => (string?)p!["user"]));
+        Assert.Equal(["NE", "CS", "Tech"], saved.Select(p => (string?)p!["label"]));
+
+        var again = TrayConfig.Load(ConfigPath);
+        Assert.Equal(config.PinsFor("/b", "a.localhost"), again.PinsFor("/b", "a.localhost"));
+    }
+
+    [Fact]
+    public void TheTenthPinIsRefusedButAPinnedUserCanBeRelabelled()
+    {
+        var config = TrayConfig.Load(ConfigPath);
+        for (var i = 0; i < TrayConfig.MaxPinsPerSite; i++) Assert.True(config.TryPin("/b", "s", $"u{i}@x.com", null));
+        Assert.False(config.TryPin("/b", "s", "u9@x.com", null));
+        Assert.True(config.TryPin("/b", "s", "u0@x.com", "First"));
+        Assert.Equal(9, config.PinsFor("/b", "s").Count);
+        Assert.Equal("First", config.PinsFor("/b", "s")[0].Label);
+
+        config.Unpin("/b", "s", "u3@x.com");
+        Assert.True(config.TryPin("/b", "s", "u9@x.com", null));
+    }
+
+    [Fact]
+    public void LoadIgnoresMalformedPinsAndCapsAtNine()
+    {
+        var many = string.Join(",", Enumerable.Range(0, 12).Select(i => "{\"user\":\"u" + i + "@x.com\"}"));
+        Write("""{"tray":{"open_as_pins":{"/b|s":[{"nouser":1},"text",{"user":"a@x.com"},{"user":"a@x.com"},MANY],"/b|t":"nope"}}}""".Replace("MANY", many));
+        var config = TrayConfig.Load(ConfigPath);
+        var pins = config.PinsFor("/b", "s");
+        Assert.Equal(9, pins.Count);
+        Assert.Equal("a@x.com", pins[0].User);
+        Assert.Empty(config.PinsFor("/b", "t"));
+    }
+
+    [Fact]
+    public void NoPinsLeavesNoPinsKeyAndASessionIdIsNeverWritten()
+    {
+        Write("""{"tray":{"open_as_pins":{"/b|s":[{"user":"a@x.com"}]}}}""");
+        var config = TrayConfig.Load(ConfigPath);
+        config.Unpin("/b", "s", "a@x.com");
+        config.Save();
+        Assert.False(Read()["tray"]!.AsObject().ContainsKey("open_as_pins"));
+    }
+
+    [Fact]
     public void ARoundTripGivesTheSameSettings()
     {
         var config = TrayConfig.Load(ConfigPath);

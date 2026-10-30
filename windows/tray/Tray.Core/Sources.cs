@@ -14,6 +14,12 @@ public interface IBenchSource
     /// <summary>Runs an action (<c>up</c>, <c>down</c>, <c>restart</c> with <c>--bench-dir</c>) and returns its exit code and, on failure, the first useful line it printed.</summary>
     Task<ActionResult> RunAsync(string[] args, CancellationToken ct);
 
+    /// <summary>
+    /// Runs a command and returns its stdout. A failing command (non zero exit) throws <see cref="SourceProblemException"/> with
+    /// the first line of its stderr. For <c>open</c> and <c>users</c>, whose answer is the point.
+    /// </summary>
+    Task<string> RunForOutputAsync(string[] args, CancellationToken ct);
+
     /// <summary><c>doctor --json --bench-dir PATH</c>. Read only.</summary>
     Task<DoctorReport> DoctorAsync(string benchPath, CancellationToken ct);
 
@@ -224,6 +230,15 @@ public sealed class ShimBenchSource : IBenchSource
         }
     }
 
+    public async Task<string> RunForOutputAsync(string[] args, CancellationToken ct)
+    {
+        var result = await RunCliAsync(args, ct).ConfigureAwait(false);
+        // stdout may hold a session id: only stderr is ever quoted
+        if (result.ExitCode != 0)
+            throw new CliProblemException(FirstLine(result.Error) ?? $"benchbar.exe exited with code {result.ExitCode}.");
+        return result.Output;
+    }
+
     public async Task<DoctorReport> DoctorAsync(string benchPath, CancellationToken ct) =>
         BenchJson.ParseDoctor((await RunCliAsync(["doctor", "--json", "--bench-dir", benchPath], ct).ConfigureAwait(false)).Output);
 
@@ -329,6 +344,17 @@ public sealed class FixtureBenchSource(string directory) : IBenchSource, ILoadSo
         // up and down rewrite nothing: a scenario stays what the folder says
         lock (_log) _log.Add(string.Join(' ', args));
         return Task.FromResult(ActionResult.Success);
+    }
+
+    /// <summary>Answers <c>open</c> from <c>open-as.json</c> and <c>users</c> from <c>users.json</c>; anything else is not a fixture command.</summary>
+    public async Task<string> RunForOutputAsync(string[] args, CancellationToken ct)
+    {
+        lock (_log) _log.Add(string.Join(' ', args));
+        var name = args.Length > 0 ? args[0] switch { "open" => "open-as.json", "users" => "users.json", _ => null } : null;
+        var file = name is null ? null : Path.Combine(Directory, name);
+        if (file is null || !File.Exists(file))
+            throw new CliProblemException($"The fixture folder has no answer for: {(args.Length > 0 ? args[0] : "(nothing)")}.");
+        return await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
     }
 
     public async Task<DoctorReport> DoctorAsync(string benchPath, CancellationToken ct)
