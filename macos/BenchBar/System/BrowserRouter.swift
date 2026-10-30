@@ -94,13 +94,19 @@ final class BrowserRouter: BrowserOpening {
     nonisolated static func readScript(bundleID: String) -> String? {
         guard bundleID != firefox, supported.contains(bundleID) else { return nil }
         let target = bundleID == safari ? "URL of front document" : "URL of active tab of front window"
-        return "tell application id \"\(bundleID)\" to get \(target)"
+        return timeLimited("tell application id \"\(bundleID)\" to get \(target)")
     }
 
     nonisolated static func replaceScript(bundleID: String, url: String) -> String? {
         guard bundleID != firefox, supported.contains(bundleID) else { return nil }
         let target = bundleID == safari ? "URL of front document" : "URL of active tab of front window"
-        return "tell application id \"\(bundleID)\" to set \(target) to \"\(escapedForAppleScript(url))\""
+        return timeLimited("tell application id \"\(bundleID)\" to set \(target) to \"\(escapedForAppleScript(url))\"")
+    }
+
+    /// The scripts run on the main thread: a browser that does not answer would hold the popover
+    /// for the two minutes an Apple Event waits by default. The consent prompt is not limited by this.
+    nonisolated static func timeLimited(_ statement: String) -> String {
+        "with timeout of 3 seconds\n\(statement)\nend timeout"
     }
 
     /// A string literal's two special characters; line breaks cannot be in one.

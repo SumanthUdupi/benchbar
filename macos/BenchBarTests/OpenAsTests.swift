@@ -229,6 +229,9 @@ struct OpenAsTests {
         _ = await switchTo("priya@example.com", on: store, cli: cli)
         store.pin("priya@example.com", fullName: "Priya Nair", bench: bench, site: site)
         #expect(!String(describing: defaults.dictionaryRepresentation()).contains(cli.sid))
+        // pins are a Data blob, whose description is only a byte count: read it as text too
+        let pinsText = (defaults.data(forKey: OpenAsStore.pinsKey)).map { String(decoding: $0, as: UTF8.self) } ?? ""
+        #expect(!pinsText.isEmpty && !pinsText.contains(cli.sid))
     }
 
     // MARK: pins and recents
@@ -238,10 +241,12 @@ struct OpenAsTests {
         let first = try makeStore(defaults: defaults)
         for number in 1...9 { #expect(first.pin("user\(number)@x.com", fullName: nil, bench: bench, site: site)) }
         #expect(!first.pin("user10@x.com", fullName: nil, bench: bench, site: site))
-        first.setLabel("  NE ", for: "user2@x.com", bench: bench, site: site)
+        first.setLabel("NE Pune", for: "user2@x.com", bench: bench, site: site)
+        first.setLabel("   ", for: "user3@x.com", bench: bench, site: site)
         let second = try makeStore(defaults: defaults)
         let pins = second.pins(bench: bench, site: site)
-        #expect(pins.count == 9 && pins[1] == PinnedUser(user: "user2@x.com", label: "NE"))
+        #expect(pins.count == 9 && pins[1] == PinnedUser(user: "user2@x.com", label: "NE Pune"))
+        #expect(pins[2].label == nil)
         #expect(second.pins(bench: bench, site: "other").isEmpty)
         second.unpin("user2@x.com", bench: bench, site: site)
         #expect(!second.isPinned("user2@x.com", bench: bench, site: site))
@@ -401,15 +406,16 @@ struct OpenAsTests {
     }
 
     @Test func theScriptsUseTheBundleIDAndEscapeTheAddress() {
-        #expect(BrowserRouter.readScript(bundleID: BrowserRouter.safari) == #"tell application id "com.apple.Safari" to get URL of front document"#)
-        #expect(BrowserRouter.readScript(bundleID: "com.google.Chrome") == #"tell application id "com.google.Chrome" to get URL of active tab of front window"#)
+        #expect(BrowserRouter.readScript(bundleID: BrowserRouter.safari)
+                == "with timeout of 3 seconds\n" + #"tell application id "com.apple.Safari" to get URL of front document"# + "\nend timeout")
+        #expect(BrowserRouter.readScript(bundleID: "com.google.Chrome")?.contains(#"tell application id "com.google.Chrome" to get URL of active tab of front window"#) == true)
         #expect(BrowserRouter.readScript(bundleID: BrowserRouter.firefox) == nil)
         #expect(BrowserRouter.readScript(bundleID: "com.example.Unknown") == nil)
-        #expect(BrowserRouter.replaceScript(bundleID: BrowserRouter.safari, url: "http://macdev:8000/app")
-                == #"tell application id "com.apple.Safari" to set URL of front document to "http://macdev:8000/app""#)
+        #expect(BrowserRouter.replaceScript(bundleID: BrowserRouter.safari, url: "http://macdev:8000/app")?
+                .contains(#"tell application id "com.apple.Safari" to set URL of front document to "http://macdev:8000/app""#) == true)
         let script = BrowserRouter.replaceScript(bundleID: "com.brave.Browser", url: "http://h/a\"b\\c\nd") ?? ""
-        #expect(script.hasSuffix(#"to "http://h/a\"b\\cd""#))
-        #expect(!script.contains("\n"))
+        #expect(script.hasSuffix(#"to "http://h/a\"b\\cd""# + "\nend timeout"))
+        #expect(script.split(separator: "\n").count == 3, "a line break in the address cannot add a line to the script")
     }
 
     @Test func onlyTheSupportedBrowsersAreTracked() {

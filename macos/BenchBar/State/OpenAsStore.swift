@@ -101,8 +101,9 @@ final class OpenAsStore {
     func setLabel(_ label: String, for user: String, bench: String, site: String) {
         let key = Self.siteKey(bench: bench, site: site)
         guard let index = pins[key]?.firstIndex(where: { $0.user == user }) else { return }
-        let trimmed = label.trimmingCharacters(in: .whitespaces)
-        pins[key]?[index].label = trimmed.isEmpty ? nil : trimmed
+        // stored as typed: trimming on every keystroke would eat the space of "NE Pune";
+        // OpenAsMenuModel.label trims when it reads
+        pins[key]?[index].label = label.trimmingCharacters(in: .whitespaces).isEmpty ? nil : label
         savePins()
     }
 
