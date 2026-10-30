@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Added
+
+- `benchbar open --as USER` opens a site signed in as any of its users,
+  with no password, to check what a role sees and which workflow actions
+  it gets. Only on a site with `developer_mode` on, Administrator
+  included. `--path` lands on a page, `--print-url` prints the link
+  instead. `benchbar open` alone opens the site, like the app's ⌘O.
+- `benchbar users` lists the enabled users of a site with their roles,
+  for picking one to open as (`--search`, `--limit`, `--json`).
+- `site list --json` and `status --json` give each site's
+  `developer_mode`.
+
 ## 0.8.0 - 2026-10-30
 
 ### Agents and recovery

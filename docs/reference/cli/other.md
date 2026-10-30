@@ -1,6 +1,6 @@
 ---
 title: "report and other commands"
-description: "benchbar report, self-update, where, list, commands, console, db, autostart, mariadb-password, uninstall-service and help: the remaining commands with flags, exit codes and examples."
+description: "benchbar report, self-update, where, list, commands, console, db, open, users, autostart, mariadb-password, uninstall-service and help: the remaining commands with flags, exit codes and examples."
 ---
 
 Every command takes the [options for every command](install.md#options-for-every-command).
@@ -198,6 +198,63 @@ Exit codes: bench's; 1 when the site does not exist.
 
 ```bash
 benchbar db --site macdev
+```
+
+## open
+
+```
+benchbar open [--site NAME] [--as USER] [--path /app/...] [--no-browser] [--print-url] [--json] [--bench-dir DIR]
+```
+
+Opens the site in your browser. With `--as USER` you are signed in as that
+user, with no password: the quickest way to check what a role sees and which
+workflow actions it gets. Without `--site`, the bench's default site;
+without `--path`, `/app` (or `/` for a Website User).
+
+`--as` works only on a site with `developer_mode` on (its `site_config.json`,
+else `common_site_config.json`), for Administrator too, and only while the
+bench runs. It starts a Frappe session for the user the way
+`bench browse --user` does and opens `/login?redirect-to=PATH&sid=…`;
+frappe sets the cookie and sends the browser on to PATH, so the session id
+does not stay in the address bar. It stays in the browser's history and the
+web log, as with `bench browse`.
+
+What a sign-in does on the site, as a real login would: the user's
+`last_login` is updated, every app's `on_login` hook runs, and Frappe keeps
+only the newest sessions of that user (`simultaneous_sessions`, 2 by
+default), so an older one (another browser, a test run) can be signed out.
+IP and login-hour restrictions on the user apply; two-factor login does not.
+
+`--print-url` prints the link instead of opening it (in `--json` as `url`);
+the link holds the session id, so treat it like a password. `--json` without
+`--print-url` leaves it out. Nothing is written to disk and no run log is
+kept.
+
+Exit codes: 0 opened (or printed); 1 a refusal: no such site or user, a
+disabled user, the bench is stopped, the site is not in developer mode, the
+site name does not resolve (`benchbar site hosts`), or Frappe refused the
+login.
+
+```bash
+benchbar open --as priya@example.com --path /app/todo
+benchbar open --site two.localhost --as Administrator --print-url
+```
+
+## users
+
+```
+benchbar users [--site NAME] [--search TEXT] [--limit N] [--json] [--bench-dir DIR]
+```
+
+The enabled users of a site, to pick one for `open --as`: System Users
+first, most recent login first, with up to five roles each (the automatic
+All, Guest and Desk User left out). `--search` matches the user id or full
+name; `--limit` is 1 to 500 (50 by default), and `truncated` in `--json`
+says more users matched. Reads only; needs the bench running.
+
+```bash
+benchbar users --search priya
+benchbar users --json --limit 200
 ```
 
 ## autostart
