@@ -397,6 +397,32 @@ struct OpenAsTests {
         #expect(!matches("http://other:8000/app"))
         #expect(!matches("https://macdev:8000/app"))
         #expect(!matches("http://macdev/app"))
+        // 127.0.0.1 and localhost on the bench's port serve its default site, and only that one
+        #expect(!matches("http://127.0.0.1:8000/app"))
+        #expect(BrowserRouter.matches(tabURL: URL(string: "http://127.0.0.1:8000/app")!, siteURL: site, isDefaultSite: true))
+        #expect(BrowserRouter.matches(tabURL: URL(string: "http://localhost:8000/app")!, siteURL: site, isDefaultSite: true))
+        #expect(!BrowserRouter.matches(tabURL: URL(string: "http://127.0.0.1:8001/app")!, siteURL: site, isDefaultSite: true))
+        #expect(!BrowserRouter.matches(tabURL: URL(string: "http://10.0.0.5:8000/app")!, siteURL: site, isDefaultSite: true))
+    }
+
+    @Test func aTabOn127001KeepsItsHostAndPageForTheDefaultSite() async throws {
+        let browser = FakeBrowser()
+        browser.tab = URL(string: "http://127.0.0.1:8000/app/nst/NST-1")
+        let cli = FakeOpenAsCLI()
+        let store = try makeStore(browser: browser, keepPage: true)
+        #expect(await store.switchTo(user: "priya@example.com", bench: bench, site: site, siteURL: siteURL, path: nil,
+                                     isDefaultSite: true, client: cli) == nil)
+        #expect(cli.opens.first?.path == "/app/nst/NST-1")
+        let link = try #require(browser.replaced.first)
+        #expect(link.host == "127.0.0.1" && link.port == 8000 && link.path == "/login")
+        #expect(browser.opened.isEmpty)
+        // the same tab on a site that is not the default one is left alone: a new tab at the site's own name
+        let other = FakeBrowser()
+        other.tab = URL(string: "http://127.0.0.1:8000/app/nst/NST-1")
+        let notDefault = try makeStore(browser: other, keepPage: true)
+        _ = await notDefault.switchTo(user: "priya@example.com", bench: bench, site: site, siteURL: siteURL, path: nil,
+                                      isDefaultSite: false, client: FakeOpenAsCLI())
+        #expect(other.replaced.isEmpty && other.opened.first?.host != "127.0.0.1")
     }
 
     @Test func theTabsPathKeepsItsQueryAndFragment() throws {

@@ -82,6 +82,13 @@ tab for that site to the new user, on the same page. That needs macOS's
 Automation permission, which macOS asks for once per browser when you first use
 it; it is off by default, and Firefox always gets a new tab.
 
+A login belongs to the address in the browser's address bar, so switching
+happens on the site's own name (`http://macdev:8000`). If you work on the
+default site at `http://127.0.0.1:8000` or `http://localhost:8000`, turn on
+**Keep the page I'm on**: a tab there is then switched in place, at that
+address. Without it, BenchBar cannot see which address your tab uses and opens
+the site's own name.
+
 BenchBar keeps the sessions it created in memory, and reuses one while the site
 still says it belongs to that user, so switching back is quick. Quitting BenchBar
 forgets them. Nothing about a session is written to disk or logged. The side

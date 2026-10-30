@@ -77,11 +77,23 @@ final class BrowserRouter: BrowserOpening {
 
     // MARK: pure
 
-    /// Same scheme, host and port: the tab is on the site being switched.
-    nonisolated static func matches(tabURL: URL, siteURL: URL) -> Bool {
-        guard tabURL.scheme == "http", siteURL.scheme == "http",
-              let tabHost = tabURL.host?.lowercased(), tabHost == siteURL.host?.lowercased() else { return false }
-        return (tabURL.port ?? 80) == (siteURL.port ?? 80)
+    /// Same scheme, host and port: the tab is on the site being switched. The
+    /// bench also serves its default site at 127.0.0.1 and localhost on its
+    /// port, and people work there; a login cookie belongs to one host, so
+    /// such a tab is the default site's too and the link has to go to it.
+    nonisolated static func matches(tabURL: URL, siteURL: URL, isDefaultSite: Bool = false) -> Bool {
+        guard tabURL.scheme == "http", siteURL.scheme == "http", let tabHost = tabURL.host?.lowercased(),
+              (tabURL.port ?? 80) == (siteURL.port ?? 80) else { return false }
+        if tabHost == siteURL.host?.lowercased() { return true }
+        return isDefaultSite && (tabHost == "127.0.0.1" || tabHost == "localhost")
+    }
+
+    /// `link` at the tab's host and port, so the cookie the link sets lands where the tab is.
+    nonisolated static func link(_ link: URL, onHostOf tab: URL) -> URL {
+        guard var parts = URLComponents(url: link, resolvingAgainstBaseURL: false) else { return link }
+        parts.host = tab.host
+        parts.port = tab.port
+        return parts.url ?? link
     }
 
     /// `/app/nst/NST-1?x=1#y` out of `http://macdev:8000/app/nst/NST-1?x=1#y`.

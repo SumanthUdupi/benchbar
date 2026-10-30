@@ -140,16 +140,16 @@ final class OpenAsStore {
     /// A session this app created is reused while the site still says it
     /// belongs to `user`; a logged out, expired or flushed one is replaced.
     func switchTo(user: String, bench: String, site: String, siteURL: String, path: String?,
-                  fullName: String? = nil, client: any OpenAsCLI) async -> String? {
+                  isDefaultSite: Bool = false, fullName: String? = nil, client: any OpenAsCLI) async -> String? {
         let siteKey = Self.siteKey(bench: bench, site: site)
         let sessionKey = "\(siteKey)|\(user)"
         switching.insert(siteKey)
         defer { switching.remove(siteKey) }
 
-        let keptTab = await tabToKeep(siteURL: siteURL)
+        let keptTab = await tabToKeep(siteURL: siteURL, isDefaultSite: isDefaultSite)
         let landing = keptTab.map(BrowserRouter.path(of:)) ?? path
 
-        let link: URL
+        var link: URL
         var name = fullName
         if let session = sessions[sessionKey], let probeURL = URL(string: session.base),
            await checkSession(probeURL, session.sid) == user,
@@ -173,15 +173,16 @@ final class OpenAsStore {
 
         recordRecent(user, fullName: name, key: siteKey)
         lastSwitchedKey = siteKey
+        if let keptTab { link = BrowserRouter.link(link, onHostOf: keptTab) }
         if keptTab != nil, await browser.replaceFrontTab(with: link) { return nil }
         browser.open(link)
         return nil
     }
 
     /// The front tab, when "Keep the page I'm on" is on and it shows this site.
-    private func tabToKeep(siteURL: String) async -> URL? {
+    private func tabToKeep(siteURL: String, isDefaultSite: Bool) async -> URL? {
         guard keepPage(), let site = URL(string: siteURL), let tab = await browser.frontTabURL(),
-              BrowserRouter.matches(tabURL: tab, siteURL: site) else { return nil }
+              BrowserRouter.matches(tabURL: tab, siteURL: site, isDefaultSite: isDefaultSite) else { return nil }
         return BrowserRouter.path(of: tab).hasPrefix("//") ? nil : tab
     }
 
@@ -202,7 +203,7 @@ extension BenchStore {
         }
         bench.lastError = nil
         if let error = await openAs.switchTo(user: user, bench: bench.path, site: row.name, siteURL: row.url, path: path,
-                                             fullName: fullName, client: client) {
+                                             isDefaultSite: row.isDefault, fullName: fullName, client: client) {
             bench.lastError = error
         }
     }
