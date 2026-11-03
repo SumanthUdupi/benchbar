@@ -30,6 +30,10 @@ FL_STEP_START=0
 FL_RUN_START="${SECONDS}"
 # the message of the last fl_die, for the done line of a JSON stream
 FL_DIE_MESSAGE=""
+# a stable id for the failure (sudo_password_wrong), the "error_id" of the done line
+FL_ERROR_ID=""
+# the fix that goes with that id, for the "fix" of the done line
+FL_ERROR_FIX=""
 
 fl_ui_init() {
   local cols
@@ -127,6 +131,16 @@ fl_tail_indented() {
 
 fl_strip_ansi() {
   sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g' -e 's/\x1b([AB]//g'
+}
+
+# fl_has_line TEXT LINE: LINE is a whole line of TEXT (grep -qxF), without a
+# pipe. "producer | grep -q" fails under pipefail when grep quits on the first
+# match and the producer then gets SIGPIPE (141), so capture the output first.
+fl_has_line() {
+  case $'\n'"$1"$'\n' in
+    *$'\n'"$2"$'\n'*) return 0 ;;
+  esac
+  return 1
 }
 
 # a word for a POSIX shell, in single quotes
@@ -358,6 +372,7 @@ fl_changed_fold() {
 fl_done_fields_v() {
   local __f="" __tail
   [[ -z "${2:-}" ]] || __f="\"exit\":${2},"
+  [[ -z "$FL_ERROR_ID" ]] || __f="${__f}\"error_id\":\"${FL_ERROR_ID}\","
   [[ -z "$FL_NEED_MISSING_JSON" ]] || __f="${__f}\"missing\":[${FL_NEED_MISSING_JSON}],"
   fl_changed_fold
   fl_done_tail_v __tail
@@ -913,7 +928,7 @@ fl_confirm() {
     return 0
   fi
   if fl_noninteractive; then
-    fl_die "'${prompt}' needs an answer, and BENCHBAR_NONINTERACTIVE=1 says nothing can ask." "Pass --yes to confirm it, or run without the mode in a terminal."
+    fl_die "'${prompt}' needs an answer, and BENCHBAR_NONINTERACTIVE=1 says nothing can ask; pass --yes to confirm it." "Pass --yes to confirm it, or run without the mode in a terminal."
   fi
   if [[ ! -t 0 ]]; then
     fl_warn "Not a terminal and --yes not given; treating '${prompt}' as no."

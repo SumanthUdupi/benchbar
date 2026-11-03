@@ -235,7 +235,11 @@ if [[ "$FL_DRY_RUN" == "1" ]]; then
     if command -v "$cmd" >/dev/null 2>&1; then
       fl_ok "${cmd} found"
     else
-      fl_warn "dry-run: ${cmd} not found; real install would stop here"
+      if [[ -n "${BENCHBAR_PLAN_STEP1:-}" ]]; then
+        fl_info "dry-run: ${cmd} is not installed yet; step 1 (${BENCHBAR_PLAN_STEP1}) will install it"
+      else
+        fl_warn "dry-run: ${cmd} not found; real install would stop here"
+      fi
     fi
   done
   fl_info "dry-run: skipping service checks for mariadbd and redis-server"
@@ -491,7 +495,7 @@ fl_section "READY"
 # plans (--port-offset), else the bench's own config, else bench's default
 READY_WEB_PORT="${BENCHBAR_WEB_PORT:-}"
 if ! [[ "$READY_WEB_PORT" =~ ^[0-9]+$ ]]; then
-  READY_WEB_PORT="$(sed -E -n 's/^[[:space:]]*"webserver_port"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p' "${BENCH_DIR}/sites/common_site_config.json" 2>/dev/null | head -n1 || true)"
+  READY_WEB_PORT="$(sed -E -n 's/^[[:space:]]*"webserver_port"[[:space:]]*:[[:space:]]*([0-9]+).*/\1/p' "${BENCH_DIR}/sites/common_site_config.json" 2>/dev/null | awk 'NR==1' || true)"
 fi
 [[ "$READY_WEB_PORT" =~ ^[0-9]+$ ]] || READY_WEB_PORT=8000
 if fl_is_linux; then

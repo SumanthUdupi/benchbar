@@ -5,6 +5,11 @@
 #
 #   benchbar open [--site S] [--as USER] [--path P] [--no-browser] [--print-url] [--json]
 #   benchbar users [--site S] [--search Q] [--limit N] [--json]
+#   benchbar site open-as on|off|status [NAME] [--json]
+#
+# --as and users work only on a site the person turned Open as on for
+# (site open-as on, kept in benchbar's state for the bench, never in
+# sites/). Plain open needs no opt-in.
 #
 # open --as starts a Frappe session for USER the way `bench browse --user`
 # does, then opens /login?redirect-to=PATH&sid=SID&t=MS: frappe sets the
@@ -141,7 +146,8 @@ fl_urlencode_v() {
     __c="${__in:__i:1}"
     case "$__c" in
       [a-zA-Z0-9.~_-]) __out="${__out}${__c}" ;;
-      *) printf -v __c '%%%02X' "'$__c"; __out="${__out}${__c}" ;;
+      # bash 3.2 sign extends a byte above 127 ('\xc3' is -61), so mask it
+      *) printf -v __c '%d' "'$__c"; printf -v __c '%%%02X' $((__c & 255)); __out="${__out}${__c}" ;;
     esac
   done
   printf -v "$1" '%s' "$__out"
@@ -174,6 +180,13 @@ fl_open_as_require_reachable() {
   fi
 }
 
+# fl_open_as_require_enabled SITE: the person turned Open as on for SITE
+fl_open_as_require_enabled() {
+  fl_open_as_enabled "$1" && return 0
+  fl_die "Open as is off for $1: nobody has turned password-less sign in on for this site." \
+    "If you want it, run in a terminal: benchbar site open-as on $1"
+}
+
 # fl_open_as_require_served SITE: the bench's web process answers as SITE.
 # `bench serve` without --site serves the default_site of
 # common_site_config.json for every Host, so a session made on any other
@@ -203,6 +216,7 @@ fl_cmd_open() {
   fl_require_bench
   [[ -n "$site" ]] || fl_die "This bench has no default site." "Pass --site NAME (benchbar site list shows them)"
   fl_site_require "$site"
+  [[ -z "$user" ]] || fl_open_as_require_enabled "$site"
   fl_open_as_require_reachable "$site"
   if [[ -n "$user" ]]; then
     fl_open_as_require_served "$site"
@@ -218,6 +232,8 @@ fl_cmd_open() {
   fi
   if [[ -n "$path" ]]; then
     [[ "$path" == /* && "$path" != //* ]] || fl_die "--path must start with a single /." "Example: --path /app/todo"
+    # a browser reads /\host as //host, another site
+    [[ "$path" != *\\* ]] || fl_die "--path cannot hold a backslash." "Example: --path /app/todo"
     fl_path_without_sid_v path "$path"
   fi
   base="http://${site}:${FL_WEB_PORT}"
@@ -275,6 +291,7 @@ fl_cmd_users() {
   fl_require_bench
   [[ -n "$site" ]] || fl_die "This bench has no default site." "Pass --site NAME (benchbar site list shows them)"
   fl_site_require "$site"
+  fl_open_as_require_enabled "$site"
   [[ -n "$(fl_port_listener_pid "$FL_REDIS_CACHE_PORT")" ]] || fl_die "The bench is not running." "Start it first: benchup"
   if [[ "$OPT_JSON" == "1" ]]; then
     fl_bench_python_v result "$FL_PY_USERS" benchbar-users "$site" "$search" "$limit" json
@@ -294,4 +311,84 @@ fl_cmd_users() {
   fi
   fl_table "${rows[@]}"
   [[ "$more" == 0 ]] || fl_note "More users match; narrow it with --search or raise --limit (up to 500)."
+}
+
+# site open-as on|off|status [NAME]: the per site opt-in. on and off change
+# benchbar's state only (OPEN_AS_SITES), never the site. on is a person's
+# decision: it is refused when nothing can ask (BENCHBAR_NONINTERACTIVE=1,
+# so also --for-agent and benchbar mcp; the dispatcher checks it before the
+# lock), so an agent cannot turn it on and then ask for a session id. off is
+# always allowed. on tells what does not work yet but still records the choice.
+fl_cmd_site_open_as() {
+  local action="${1:-}" name="" a dm=false enabled=false served="" active=false why=""
+  shift || true
+  [[ "$action" == on || "$action" == off || "$action" == status ]] \
+    || fl_die "Usage: benchbar site open-as on|off|status [NAME] [--json]" "Example: benchbar site open-as on ${FL_SITE:-NAME}"
+  for a in "$@"; do
+    case "$a" in
+      -*) fl_die "Unknown option for site open-as: $a" "Use: benchbar site open-as on|off|status [NAME] [--json]" ;;
+      *) [[ -n "$name" ]] || name="$a" ;;
+    esac
+  done
+  [[ "$action" != status ]] || fl_site_json_begin
+  fl_require_bench
+  [[ -n "$name" ]] || name="$FL_SITE"
+  [[ -n "$name" ]] || fl_die "This bench has no default site." "Pass NAME: benchbar site open-as ${action} NAME"
+  fl_site_valid_name "$name"
+  fl_site_require "$name"
+  fl_site_config_value_v served default_site
+  if [[ "$action" == on ]]; then
+    fl_noninteractive && fl_die "Turning on Open as is a person's decision, so nothing run without a terminal can do it." \
+      "Run it in a terminal: benchbar site open-as on ${name}"
+    # --yes skips the question, not the person: a terminal on stdin, or the app (BENCHBAR_SUDO=gui, after its own alert)
+    [[ "${FL_DRY_RUN:-0}" == 1 || -t 0 || "${BENCHBAR_SUDO:-}" == gui ]] || fl_die "Turning on Open as needs a person at a terminal, and this run has none." \
+      "Run it in a terminal: benchbar site open-as on ${name}"
+    if ! fl_open_as_enabled "$name" && [[ "${FL_DRY_RUN:-0}" != "1" ]]; then
+      fl_info "Open as signs in as any enabled user of ${name} with no password: benchbar open --as USER."
+      fl_info "Each sign in runs the apps' on_login and on_session_creation hooks, as a real login does: the user's last_login is updated and Frappe writes an Activity Log entry; signing in as Administrator can mail the System Managers; ERPNext can create a Customer or Supplier for a Website User; past the simultaneous_sessions limit, that user's oldest session ends."
+      fl_info "Turning it off later does not end the sessions already made."
+      fl_confirm "Turn on Open as for ${name}?" || fl_die "Open as stays off for ${name}." "Run again and answer yes, or pass --yes"
+    fi
+  fi
+  case "$action" in
+    on)
+      if fl_open_as_enabled "$name"; then fl_ok "unchanged: Open as is already on for ${name}"
+      elif [[ "${FL_DRY_RUN:-0}" == "1" ]]; then fl_info "dry-run: would turn on Open as for ${name} (benchbar state only)"
+      else
+        fl_open_as_set "$name" 1
+        fl_changed open_as "$name" "turned on"
+        fl_ok "Open as is on for ${name} (benchbar state only, ${name} itself is not changed)"
+      fi ;;
+    off)
+      if ! fl_open_as_enabled "$name"; then fl_ok "unchanged: Open as is already off for ${name}"
+      elif [[ "${FL_DRY_RUN:-0}" == "1" ]]; then fl_info "dry-run: would turn off Open as for ${name}"
+      else
+        fl_open_as_set "$name" 0
+        fl_changed open_as "$name" "turned off"
+        fl_ok "Open as is off for ${name}"
+      fi ;;
+  esac
+  fl_site_developer_mode "$name" && dm=true
+  fl_open_as_enabled "$name" && enabled=true
+  [[ "$enabled" == true && "$dm" == true && ( -z "$served" || "$served" == "$name" ) ]] && active=true
+  if [[ "$enabled" == true && "$dm" != true ]]; then
+    why="${name} is not in developer mode, so open --as will refuse it. On a development site: bench --site ${name} set-config developer_mode 1"
+  elif [[ "$enabled" == true && -n "$served" && "$served" != "$name" ]]; then
+    why="Port ${FL_WEB_PORT} serves only ${served}, so open --as will refuse ${name}. Use: benchbar site default ${name}, then benchrestart"
+  fi
+  if [[ "$action" == status && "$OPT_JSON" != "1" ]]; then
+    fl_ok "${name}: Open as is $([[ "$enabled" == true ]] && printf on || printf off)$([[ "$enabled" == true && "$active" == true ]] && printf ', ready' || true)"
+    [[ "$enabled" == true ]] || fl_info "Turn it on in a terminal: benchbar site open-as on ${name}"
+  fi
+  [[ -z "$why" ]] || fl_warn "$why"
+  fl_open_as_result_doc "$name" "$enabled" "$dm" "$active"
+}
+
+# fl_open_as_result_doc NAME ENABLED DEVMODE ACTIVE: the document of site
+# open-as (status: one document with the done fields; on and off: what the
+# stream's done line merges)
+fl_open_as_result_doc() {
+  [[ "$OPT_JSON" == "1" || "${FL_JSONL:-0}" == "1" ]] || return 0
+  fl_doc_emit 0 "$(printf '{"schema_version":%d,"cli_version":"%s","bench":%s,"site":%s,"default_site":%s,"open_as_enabled":%s,"developer_mode":%s,"open_as":%s}' \
+    "$FL_SCHEMA_VERSION" "${FL_VERSION:-0}" "$(fl_json_str "$FL_BENCH_DIR")" "$(fl_json_str "$1")" "$(fl_json_str "$FL_SITE")" "$2" "$3" "$4")"
 }

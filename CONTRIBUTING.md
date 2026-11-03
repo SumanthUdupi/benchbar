@@ -10,8 +10,11 @@ Security problems go through a private report, never a public issue: see
 
 ## Before you start
 
-- **A bug:** open an issue with the bug form and attach the zip from
-  `benchbar report`. It contains no secrets, paths or names.
+- **A bug on macOS or Linux:** open an issue with the bug form and attach
+  the zip from `benchbar report`. It contains no secrets, paths or names.
+- **A bug on Windows (beta):** use **Report a Bug** in the tray. It writes
+  a redacted zip and opens the Windows bug form with the zip to drag in.
+  User names and home paths are replaced in that zip.
 - **A small fix:** open a pull request directly.
 - **A large change** (a new command, a new doctor check family, a change
   to the JSON API or the runner format, anything across the CLI and the
@@ -23,6 +26,7 @@ Security problems go through a private report, never a public issue: see
 
 ```bash
 tests/run-tests.sh              # the CLI, under mocks, in parallel; shellcheck when installed
+tests/affected.sh               # only the CLI tests your change touches (--base REF, --all)
 scripts/macos-build.sh --test   # the app and its Swift tests
 (cd windows/shim && go test ./...)                     # benchbar.exe, any OS
 dotnet test windows/tray/BenchBarTray.sln -c Release   # the tray, on Windows
@@ -33,7 +37,7 @@ test builds its own `HOME` and mock state. `tests/run-tests.sh test-doctor`
 runs one file. [docs/testing.md](docs/testing.md) is the guide for
 trying a build on a real Mac.
 
-CI runs the suite on macOS and on Linux, installs a real bench on Ubuntu
+CI runs the suite on macOS, on Linux and under bash 3.2 in a container, installs a real bench on Ubuntu
 under `systemd --user`, builds the app, builds and tests the Windows shim
 and tray, and uploads an unsigned bundle for every pull request.
 
@@ -58,6 +62,8 @@ and tray, and uploads an unsigned bundle for every pull request.
 
 ## What a pull request needs
 
+- **Against `next-release`.** `main` holds the last release and moves only
+  when one is cut ([docs/releasing.md](docs/releasing.md#branches)).
 - **Small, one topic.** A fix and a refactor are two pull requests.
 - **CHANGELOG.** A line under `## Unreleased` in
   [CHANGELOG.md](CHANGELOG.md), in the section that fits.
@@ -66,9 +72,10 @@ and tray, and uploads an unsigned bundle for every pull request.
   [docs/DECISIONS.md](docs/DECISIONS.md), app choices in
   [macos/DECISIONS.md](macos/DECISIONS.md). If a reviewer would ask "why
   not the obvious way?", that answer is a DECISIONS line.
-- **Tested on.** The macOS version, the profile (`v15-lts`, `v16-lts` or
-  a team profile) and whether it ran on a real Mac with a real bench, not
-  only under the mocks.
+- **Tested on.** The OS (the macOS version, or the Ubuntu version, or the
+  Windows edition and build with the WSL distro), the profile (`v15-lts`,
+  `v16-lts` or a team profile) and whether it ran on a real machine with a
+  real bench, not only under the mocks.
 - **Commits** have an imperative subject ("Add", "Fix", "Read") and a
   body that says why.
 

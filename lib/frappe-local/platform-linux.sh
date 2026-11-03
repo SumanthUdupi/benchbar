@@ -139,7 +139,7 @@ fl__python_bin_for() {
   done
   if [[ -n "$best" ]]; then printf '%s' "$best"; return 0; fi
   if [[ "${FL_CONTEXT_LIGHT:-0}" != "1" ]] && command -v uv >/dev/null 2>&1; then
-    found="$(uv python find "$ver" 2>/dev/null | head -n1 || true)"
+    found="$(uv python find "$ver" 2>/dev/null | awk 'NR==1' || true)"
     if [[ -n "$found" && -x "$found" ]]; then printf '%s' "$found"; return 0; fi
   fi
   # where uv puts it: the path is right once `uv python install` has run
@@ -323,17 +323,42 @@ fl_pid_cwd() {
   readlink "${FL_PROC_DIR}/$1/cwd" 2>/dev/null || true
 }
 
+fl_port_owner_cwd() {
+  local pid
+  # the first listener whose owner is visible (a hidden one is pid 0)
+  while IFS= read -r pid; do
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || continue
+    fl_pid_cwd "$pid"
+    return 0
+  done < <(fl_port_listener_pids "$1")
+  return 0
+}
+
 fl_bench_listener_pids() {
   local port pid cmd addr
   fl__ss_listeners "${1:-$(fl_bench_ports_csv)}" | while read -r port pid cmd addr; do
     [[ "$pid" =~ ^[1-9][0-9]*$ ]] && fl_pid_is_bench_own_strict "$pid" && printf '%s\n' "$pid"
-  done
+  done | awk '!seen[$0]++'
   return 0
 }
 
 fl_port_listener_pid() {
   local port pid cmd addr
-  fl__ss_listeners "$1" | { read -r port pid cmd addr && printf '%s\n' "$pid"; } || true
+  # a pid of 0 is an owner ss does not show: skipped, the next listener may be visible
+  fl__ss_listeners "$1" | while read -r port pid cmd addr; do
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] && { printf '%s\n' "$pid"; break; }
+  done || true
+}
+
+# fl_port_listener_pids PORT: the pid of every listener on PORT, once each, one
+# per line. A socket whose owner ss does not show (another user's, docker-proxy)
+# is the pid 0: a listener that is never ours.
+fl_port_listener_pids() {
+  local port pid cmd addr
+  fl__ss_listeners "$1" | while read -r port pid cmd addr; do
+    printf '%s\n' "$pid"
+  done | awk '!seen[$0]++'
+  return 0
 }
 
 fl_port_listener_summary() {
@@ -345,6 +370,31 @@ fl_port_listener_summary() {
 fl_port_listen_addresses() {
   # prints the local address:port of every listener on a port, one per line
   fl__ss_listeners "$1" | awk '{print $4}' | sort -u || true
+}
+
+# fl_install_port_blockers: lines "id|message|fix", one per port that
+# something else holds and that this install needs: 3306 (MariaDB) and 6379
+# (the system Redis, which phase 00 starts). A listener is this install's own
+# when the unit (mariadb, redis-server) of this distro is active, so a rerun
+# passes. ss may not show the owner (another user's process, or another WSL
+# distro, whose processes are in a PID space of their own), so the unit is
+# the test, not the pid. Nothing is stopped.
+fl_install_port_blockers() {
+  local spec port unit what id msg fix
+  for spec in "3306 mariadb MariaDB" "6379 redis-server Redis"; do
+    read -r port unit what <<<"$spec"
+    fl_port_listening "$port" || continue
+    fl_linux_unit_active "$unit" && continue
+    id="port_${port}_in_use"
+    if fl_is_wsl; then
+      msg="Another WSL distro or program already uses port ${port} (${what}). WSL distros share one network, so only one can run ${what} on it. Stop ${what} in the other distro, or install in that distro."
+      fix="In the other distro run: sudo systemctl stop ${unit} (wsl.exe --list --running names the distros that run), then run benchbar install again"
+    else
+      msg="Another program already uses port ${port} (${what}), so the ${what} of this install could not start. Stop it, or install on a machine where the port is free."
+      fix="Find it with: ss -ltnp 'sport = :${port}', stop it, then run benchbar install again"
+    fi
+    printf '%s|%s|%s\n' "$id" "$msg" "$fix"
+  done
 }
 
 # fl_bench_status_pids: as on the Mac, from `pgrep -af` (procps prints the
@@ -508,7 +558,7 @@ fl_mariadb_admin_open() {
     return 1
   fi
   hash="$(sudo "$bin" --protocol=socket -u root --connect-timeout=2 -sNe "SELECT authentication_string FROM mysql.user WHERE User='root' AND Host='localhost'" 2>/dev/null)" || return 1
-  case "$(printf '%s\n' "$hash" | head -n1)" in
+  case "$(printf '%s\n' "$hash" | awk 'NR==1')" in
     invalid|NULL|"") ;;
     *) return 1 ;;
   esac
@@ -685,7 +735,7 @@ fl_wkhtmltopdf_install() {
   [[ "$code" == "0" ]] || return 1
   hash -r 2>/dev/null || true
   case "$(fl_wkhtmltopdf_state)" in
-    patched) fl_ok "$("$(fl_wkhtmltopdf_bin)" --version 2>&1 | head -n1) at $(fl_wkhtmltopdf_bin)"; fl_wkhtmltopdf_shadow_warn ;;
+    patched) fl_ok "$("$(fl_wkhtmltopdf_bin)" --version 2>&1 | awk 'NR==1') at $(fl_wkhtmltopdf_bin)"; fl_wkhtmltopdf_shadow_warn ;;
     *) fl_fail "the package installed but 'wkhtmltopdf --version' does not say 'with patched qt'"; return 1 ;;
   esac
 }
@@ -707,13 +757,17 @@ fl_hosts_has_name() { fl_linux_hosts_resolves "$1"; }
 
 # a name that does not resolve gets the command to run; benchbar never edits /etc/hosts here
 fl_hosts_add_names() {
-  local n
+  local n cmd missing=0
   for n in "$@"; do
     fl_site_name_ok "$n" || continue
     fl_linux_hosts_resolves "$n" && continue
+    missing=1
+    cmd="$(printf 'printf "127.0.0.1 %s\\n" | sudo tee -a /etc/hosts' "$n")"
     fl_warn "${n} does not resolve to this machine; add it to /etc/hosts yourself:"
-    printf '  printf "127.0.0.1 %s\\n" | sudo tee -a /etc/hosts\n\n' "$n"
+    printf '  %s\n\n' "$cmd"
+    fl_next_action "$cmd" "${n} does not resolve to this machine"
   done
+  [[ "$missing" == "1" ]] || fl_ok "unchanged: every site name resolves to this machine (benchbar does not edit /etc/hosts on Linux)"
   return 0
 }
 

@@ -3,6 +3,8 @@
 # id kept out of logs and JSON, and argv that survives quotes and '+'.
 # shellcheck source=tests/lib/harness.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/harness.sh"
+# shellcheck source=tests/lib/install-stream.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/install-stream.sh"
 
 BENCH="$HOME/dev/frappe-bench"
 make_fake_bench "$BENCH" v16dev
@@ -20,6 +22,70 @@ cat >"$MOCK_STATE/users.json" <<'JSON'
 JSON
 bench_up() { add_listener 8000 4242 python; add_listener 13000 4243 redis-server; }
 
+# ---- Open as is off until a person turns it on for the site
+run_fm open --as priya@example.com --bench-dir "$BENCH"
+assert_eq "1" "$CODE"; assert_contains "$OUT" "Open as is off for v16dev"; assert_contains "$OUT" "benchbar site open-as on v16dev"
+run_fm users --bench-dir "$BENCH"
+assert_eq "1" "$CODE"; assert_contains "$OUT" "Open as is off for v16dev"; assert_contains "$OUT" "benchbar site open-as on v16dev"
+assert_calls_not_contain '^bench-python'
+assert_calls_not_contain '^open '
+run_fm site open-as status --json --bench-dir "$BENCH"
+assert_eq "0" "$CODE" "$OUT"
+assert_eq "False True False" "$(printf '%s' "$OUT" | jget - 'd["open_as_enabled"], d["developer_mode"], d["open_as"]' | tr -d "(),'")" "(developer_mode alone does not make it work)"
+run_fm site list --json --bench-dir "$BENCH"
+assert_eq "False True False" "$(printf '%s' "$OUT" | jget - 'd["sites"][0]["open_as_enabled"], d["sites"][0]["developer_mode"], d["sites"][0]["open_as"]' | tr -d "(),'")"
+
+# nothing that cannot ask turns it on: BENCHBAR_NONINTERACTIVE=1, --for-agent and the MCP server
+BENCHBAR_NONINTERACTIVE=1 run_fm site open-as on v16dev --yes --bench-dir "$BENCH"
+assert_eq "1" "$CODE" "$OUT"; assert_contains "$OUT" "person"; assert_contains "$OUT" "terminal"
+run_fm site open-as on v16dev --yes --for-agent --bench-dir "$BENCH"
+assert_eq "1" "$CODE" "$OUT"
+run_fm site open-as on v16dev --yes --dry-run --for-agent --bench-dir "$BENCH"
+assert_eq "1" "$CODE" "$OUT"
+run_fm site open-as status --bench-dir "$BENCH"
+assert_contains "$OUT" "Open as is off"
+if grep -rq OPEN_AS_SITES "$FL_STATE_DIR" 2>/dev/null; then fail "a refused on left a record"; fi
+# --yes without a terminal (an agent's plain shell) is refused too; the app passes BENCHBAR_SUDO=gui after its alert
+run_fm site open-as on v16dev --yes --bench-dir "$BENCH"
+assert_eq "1" "$CODE" "$OUT"; assert_contains "$OUT" "needs a person at a terminal"
+# a name that is no site
+run_fm site open-as on nosuch --yes --bench-dir "$BENCH"
+assert_eq "1" "$CODE"; assert_contains "$OUT" "No site 'nosuch'"
+run_fm site open-as sideways --bench-dir "$BENCH"; assert_eq "1" "$CODE"; assert_contains "$OUT" "Usage: benchbar site open-as on|off|status"
+
+# on: what a sign in does is said, the choice is benchbar state only
+snap_sites="$(snapshot "$BENCH/sites")"
+BENCHBAR_SUDO=gui run_fm site open-as on --yes --bench-dir "$BENCH"
+assert_eq "0" "$CODE" "$OUT"
+assert_contains "$OUT" "on_login"; assert_contains "$OUT" "last_login"; assert_contains "$OUT" "simultaneous_sessions"
+assert_contains "$OUT" "on_session_creation"; assert_contains "$OUT" "Activity Log"; assert_contains "$OUT" "System Managers"; assert_contains "$OUT" "does not end the sessions already made"
+assert_eq "$snap_sites" "$(snapshot "$BENCH/sites")" "(on writes nothing under sites/)"
+BENCHBAR_SUDO=gui run_fm site open-as on v16dev --yes --bench-dir "$BENCH"
+assert_contains "$OUT" "unchanged: Open as is already on for v16dev"
+run_fm site open-as status --json --bench-dir "$BENCH"
+assert_eq "True True True" "$(printf '%s' "$OUT" | jget - 'd["open_as_enabled"], d["developer_mode"], d["open_as"]' | tr -d "(),'")"
+run_fm site list --json --bench-dir "$BENCH"
+assert_eq "True True True" "$(printf '%s' "$OUT" | jget - 'd["sites"][0]["open_as_enabled"], d["sites"][0]["developer_mode"], d["sites"][0]["open_as"]' | tr -d "(),'")"
+run_fm status --json --bench-dir "$BENCH"
+assert_eq "True" "$(printf '%s' "$OUT" | jget - 'd["sites"][0]["open_as"]')" "(status carries it too)"
+# on and off as a stream: one done line with the changed record
+stream site open-as off v16dev --json --bench-dir "$BENCH"
+assert_eq "0" "$CODE" "$(cat "$STREAM.err")"
+assert_eq "open_as v16dev False" "$(sx 'e[-1]["changed"][0]["kind"] + " " + e[-1]["site"] + " " + str(e[-1]["open_as_enabled"])')"
+run_fm site open-as off v16dev --bench-dir "$BENCH"
+assert_contains "$OUT" "unchanged: Open as is already off"
+# off is allowed without a terminal
+BENCHBAR_NONINTERACTIVE=1 run_fm site open-as off v16dev --bench-dir "$BENCH"
+assert_eq "0" "$CODE" "$OUT"
+# not in developer mode yet: on says so and still records the choice
+printf '{\n "db_name": "_v16dev"\n}\n' >"$BENCH/sites/v16dev/site_config.json"
+BENCHBAR_SUDO=gui run_fm site open-as on v16dev --yes --bench-dir "$BENCH"
+assert_eq "0" "$CODE" "$OUT"; assert_contains "$OUT" "not in developer mode"
+OUT="$("$FM" site open-as status --json --bench-dir "$BENCH" 2>/dev/null)"
+assert_contains "$(printf '%s' "$OUT" | jget - 'd["warnings"][0]')" "not in developer mode"
+assert_eq "True False False" "$(printf '%s' "$OUT" | jget - 'd["open_as_enabled"], d["developer_mode"], d["open_as"]' | tr -d "(),'")"
+printf '{\n "db_name": "_v16dev",\n "developer_mode": 1\n}\n' >"$BENCH/sites/v16dev/site_config.json"
+
 # ---- the bench must run: no session, no python, no browser while it is stopped
 run_fm open --as priya@example.com --bench-dir "$BENCH"
 assert_eq "1" "$CODE" "$OUT"; assert_contains "$OUT" "The bench is not running."; assert_contains "$OUT" "benchup"
@@ -28,6 +94,12 @@ assert_eq "1" "$CODE" "$OUT"; assert_contains "$OUT" "The bench is not running."
 assert_calls_not_contain '^bench-python'
 assert_calls_not_contain '^open '
 bench_up
+
+# plain open needs no opt-in
+run_fm site open-as off v16dev --bench-dir "$BENCH"; assert_eq "0" "$CODE" "$OUT"
+run_fm open --no-browser --bench-dir "$BENCH"
+assert_eq "0" "$CODE" "(plain open stays available) $OUT"
+BENCHBAR_SUDO=gui run_fm site open-as on v16dev --yes --bench-dir "$BENCH"; assert_eq "0" "$CODE" "$OUT"
 
 # ---- users
 run_fm users --json --bench-dir "$BENCH"
@@ -94,6 +166,7 @@ run_fm open --as web@example.com --bench-dir "$BENCH"
 assert_calls_contain '^open http://v16dev:8000/login\?redirect-to=%2F&sid='
 run_fm open --as priya@example.com --path app/x --bench-dir "$BENCH"; assert_eq "1" "$CODE"; assert_contains "$OUT" "--path must start with a single /."
 run_fm open --as priya@example.com --path //evil.example --bench-dir "$BENCH"; assert_eq "1" "$CODE"; assert_contains "$OUT" "--path must start with a single /."
+run_fm open --as priya@example.com --path '/\evil.example' --bench-dir "$BENCH"; assert_eq "1" "$CODE"; assert_contains "$OUT" "--path cannot hold a backslash."
 
 # ---- refusals from the helper come through as they are
 run_fm open --as nobody@example.com --bench-dir "$BENCH"; assert_eq "1" "$CODE"; assert_contains "$OUT" "No user 'nobody@example.com' on v16dev."
@@ -129,6 +202,8 @@ printf '{\n "db_name": "_v16dev",\n "developer_mode": 1\n}\n' >"$BENCH/sites/v16
 mkdir -p "$BENCH/sites/two.localhost" "$BENCH/sites/three"
 printf '{\n "developer_mode": 1\n}\n' >"$BENCH/sites/two.localhost/site_config.json"
 printf '{\n "developer_mode": 1\n}\n' >"$BENCH/sites/three/site_config.json"
+BENCHBAR_SUDO=gui run_fm site open-as on two.localhost --yes --bench-dir "$BENCH"; assert_eq "0" "$CODE" "$OUT"
+BENCHBAR_SUDO=gui run_fm site open-as on three --yes --bench-dir "$BENCH"; assert_eq "0" "$CODE" "$OUT"
 reset_calls
 run_fm open --site two.localhost --as priya@example.com --bench-dir "$BENCH"
 assert_eq "1" "$CODE" "$OUT"
@@ -154,6 +229,12 @@ reset_calls
 run_fm open --as priya@example.com --path '/app/x?a=1&&sid&b=2' --bench-dir "$BENCH"
 assert_eq "0" "$CODE" "$OUT"
 assert_calls_contain '^open http://v16dev:8000/login\?redirect-to=%2Fapp%2Fx%3Fa%3D1%26b%3D2&sid='
+
+# ---- a path with bytes above 127 is encoded byte by byte (bash 3.2 sign extends them)
+reset_calls
+run_fm open --as priya@example.com --path '/app/café' --bench-dir "$BENCH"
+assert_eq "0" "$CODE" "$OUT"
+assert_calls_contain '^open http://v16dev:8000/login\?redirect-to=%2Fapp%2Fcaf%C3%A9&sid='
 
 # ---- a second run works the same (a launch has no "unchanged")
 reset_calls

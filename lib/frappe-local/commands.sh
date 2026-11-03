@@ -34,17 +34,23 @@ flag~install~--dry-run~~Print the plan, change nothing.
 flag~install~--yes~~Do not ask; secrets come from the environment.
 env~install~ADMIN_PASSWORD~The new site's Administrator password.
 env~install~MARIADB_ROOT_PASSWORD~Only when MariaDB has a password benchbar does not know.
+env~install~BENCHBAR_SUDO~Linux only: env makes the sudo steps use BENCHBAR_SUDO_PASSWORD, no terminal needed (a wrong one fails at once with error_id sudo_password_wrong, before any change).
+env~install~BENCHBAR_SUDO_PASSWORD~The sudo password, with BENCHBAR_SUDO=env. Read once at startup and removed from the environment; never in argv, the log or a child.
 cmd~adopt~benchbar adopt PATH [--dry-run] [--yes] [--json]~Register an existing bench: Procfile.lean, runner, agent, helpers. Never runs migrate, build or update.~yes~yes~no~yes~stream
 flag~adopt~--port-offset~N~Move the bench to port block N.
 flag~adopt~--make-default~~Make this the default bench.
 flag~adopt~--dry-run~~Print the plan, change nothing.
 flag~adopt~--yes~~Do not ask.
+env~adopt~BENCHBAR_SUDO~Linux only: env makes the sudo steps use BENCHBAR_SUDO_PASSWORD, no terminal needed (a wrong one fails at once with error_id sudo_password_wrong, before any change).
+env~adopt~BENCHBAR_SUDO_PASSWORD~The sudo password, with BENCHBAR_SUDO=env. Read once at startup and removed from the environment; never in argv, the log or a child.
 cmd~service~benchbar service [--with-schedule|--without-schedule] [--port-offset N] [--dry-run|--apply TOKEN --yes] [--json]~Install or refresh only the background service (phase 02).~yes~no~no~yes~stream
 flag~service~--with-schedule~~Add the scheduler to Procfile.lean.
 flag~service~--without-schedule~~Remove it again.
 flag~service~--port-offset~N~Use port block N.
 flag~service~--dry-run~~Print the plan and its token, change nothing.
 flag~service~--apply~TOKEN~Run exactly that plan (with --yes).
+env~service~BENCHBAR_SUDO~Linux only: env makes the sudo steps use BENCHBAR_SUDO_PASSWORD, no terminal needed (a wrong one fails at once with error_id sudo_password_wrong, before any change).
+env~service~BENCHBAR_SUDO_PASSWORD~The sudo password, with BENCHBAR_SUDO=env. Read once at startup and removed from the environment; never in argv, the log or a child.
 cmd~mariadb-password~benchbar mariadb-password [--yes]~Print the MariaDB root password (asks first).~yes~no~no~no~none
 flag~mariadb-password~--yes~~Do not ask.
 cmd~doctor~benchbar doctor [--json] [--fix-hints] [--quick] [--ack CHECK] [--unack CHECK] [--prerequisites] [--fetch]~Read only health report. Exit 1 when something FAILs.~no~no~no~no~document
@@ -53,11 +59,13 @@ flag~doctor~--fix-hints~~Only the fix commands, one per line.
 flag~doctor~--quick~~Skip the slow checks and say which.
 flag~doctor~--ack~CHECK~Silence one named WARN for this bench until its message changes.
 flag~doctor~--unack~CHECK~Undo --ack.
-flag~doctor~--prerequisites~~What this Mac needs before an install, no bench needed.
+flag~doctor~--prerequisites~~What this machine needs before an install, no bench needed.
 flag~doctor~--fetch~~git fetch the branches of the apps your focus apps need first.
 cmd~repair~benchbar repair [--dry-run] [--yes] [--json]~Apply only the fixes doctor flagged, in dependency order.~yes~yes~yes~yes~stream
 flag~repair~--dry-run~~Print the plan, change nothing.
 flag~repair~--yes~~Do not ask.
+env~repair~BENCHBAR_SUDO~Linux only: env makes the sudo steps use BENCHBAR_SUDO_PASSWORD, no terminal needed (a wrong one fails at once with error_id sudo_password_wrong, before any change).
+env~repair~BENCHBAR_SUDO_PASSWORD~The sudo password, with BENCHBAR_SUDO=env. Read once at startup and removed from the environment; never in argv, the log or a child.
 cmd~status~benchbar status [--json] [--ping]~State, pid, stop reason, site ping.~no~no~no~no~document
 flag~status~--ping~~Ask every site, not only the default one.
 cmd~list~benchbar list [--json]~Every bench benchbar knows about. Never pings a site.~no~no~no~no~document
@@ -84,13 +92,13 @@ flag~uninstall-service~--yes~~Do not ask; required without a terminal.
 cmd~path~benchbar path~Print the bench directory.~no~no~no~no~none
 cmd~console~benchbar console [--site S]~bench --site SITE console: a Python shell with frappe.~yes~no~no~no~none
 cmd~db~benchbar db [--site S]~bench --site SITE mariadb: the site's database.~yes~no~no~no~none
-cmd~open~benchbar open [--site S] [--as USER] [--path P] [--no-browser] [--print-url] [--json]~Open a site in the browser, or open it signed in as USER (developer_mode sites only).~no~no~no~no~document
-flag~open~--as~USER~Sign in as this user, no password. Refused unless the site has developer_mode on.
+cmd~open~benchbar open [--site S] [--as USER] [--path P] [--no-browser] [--print-url] [--json]~Open a site in the browser, or open it signed in as USER (developer_mode sites that were opted in with site open-as on).~no~no~no~no~document
+flag~open~--as~USER~Sign in as this user, no password. Refused unless site open-as is on for the site and developer_mode is on. A sign in runs the apps' on_login and on_session_creation hooks as a real login does: last_login, an Activity Log entry, a mail to System Managers for Administrator, an ERPNext Customer or Supplier for a Website User, and Frappe may end the user's oldest session (simultaneous_sessions).
 flag~open~--path~P~Where to land, for example /app/todo. Default: /app, or / for a Website User.
 flag~open~--no-browser~~Start the session, open nothing.
 flag~open~--print-url~~Print the link (it holds the session id) instead of opening it; in --json as url.
 flag~open~--json~~One JSON document; url only with --print-url.
-cmd~users~benchbar users [--site S] [--search Q] [--limit N] [--json]~Enabled users of a site, for open --as.~no~no~no~no~document
+cmd~users~benchbar users [--site S] [--search Q] [--limit N] [--json]~Enabled users of a site, for open --as (needs site open-as on).~no~no~no~no~document
 flag~users~--search~TEXT~Only users whose id or full name contains TEXT.
 flag~users~--limit~N~At most N users (1 to 500, default 50).
 flag~users~--json~~One JSON document.
@@ -116,9 +124,11 @@ cmd~ports plan~benchbar ports plan [--json] -- PATH ...~Read only preview of the
 cmd~ports setup~benchbar ports setup [--dry-run] -- PATH ...~Preview, confirm once, then apply.~yes~yes~no~yes~none
 cmd~ports apply~benchbar ports apply TOKEN --yes [--json] -- PATH ...~Apply a reviewed plan; refuses a stale token.~no~yes~no~yes~stream
 flag~ports apply~--yes~~Required: the plan was reviewed.
+env~ports apply~BENCHBAR_SUDO~Linux only: env makes the sudo steps use BENCHBAR_SUDO_PASSWORD, no terminal needed (a wrong one fails at once with error_id sudo_password_wrong, before any change).
+env~ports apply~BENCHBAR_SUDO_PASSWORD~The sudo password, with BENCHBAR_SUDO=env. Read once at startup and removed from the environment; never in argv, the log or a child.
 cmd~ports check~benchbar ports check [--json]~Port conflicts of the bench.~no~no~no~no~document
 cmd~ports mode~benchbar ports mode automatic|fixed~Keep automatic or fixed ports for the bench.~no~no~no~yes~none
-cmd~site~benchbar site list|add|default|hosts|backup|backups|restore|drop ...~The sites of a bench.~no~no~no~no~none
+cmd~site~benchbar site list|add|default|hosts|backup|backups|restore|drop|open-as ...~The sites of a bench.~no~no~no~no~none
 cmd~site list~benchbar site list [--json]~The bench's sites; the default one is what benchup waits for.~no~no~no~no~document
 cmd~site add~benchbar site add NAME [--bundle NAME|--apps "a b"] [--dry-run|--apply TOKEN] [--yes] [--json]~bench new-site, the hosts line and apps from apps/. The default site stays.~yes~yes~no~yes~stream
 flag~site add~--bundle~NAME~App bundle to install.
@@ -128,7 +138,12 @@ flag~site add~--apply~TOKEN~Run exactly that plan (with --yes).
 flag~site add~--yes~~Do not ask.
 env~site add~ADMIN_PASSWORD~The new site's Administrator password.
 env~site add~MARIADB_ROOT_PASSWORD~Only when MariaDB has a password benchbar does not know.
+env~site add~BENCHBAR_SUDO~Linux only: env makes the sudo steps use BENCHBAR_SUDO_PASSWORD, no terminal needed (a wrong one fails at once with error_id sudo_password_wrong, before any change).
+env~site add~BENCHBAR_SUDO_PASSWORD~The sudo password, with BENCHBAR_SUDO=env. Read once at startup and removed from the environment; never in argv, the log or a child.
 cmd~site default~benchbar site default NAME [--json]~Make NAME the default site.~no~no~no~yes~stream
+cmd~site open-as~benchbar site open-as on|off|status [NAME] [--json]~Turn password-less sign in (open --as) on or off for a site, or show it. Changes benchbar's state only. on needs a person at a terminal.~yes~no~no~yes~stream
+flag~site open-as~--yes~~Do not ask before turning on (still refused without a terminal session, BENCHBAR_NONINTERACTIVE=1).
+flag~site open-as~--json~~JSON lines for on and off, one document for status.
 cmd~site hosts~benchbar site hosts~Add a 127.0.0.1 line for every site to /etc/hosts.~yes~yes~no~yes~none
 cmd~site backup~benchbar site backup NAME [--with-files] [--json]~bench --site NAME backup.~no~no~no~yes~document
 flag~site backup~--with-files~~Include the uploads.

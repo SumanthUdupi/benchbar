@@ -14,12 +14,6 @@ public interface IBenchSource
     /// <summary>Runs an action (<c>up</c>, <c>down</c>, <c>restart</c> with <c>--bench-dir</c>) and returns its exit code and, on failure, the first useful line it printed.</summary>
     Task<ActionResult> RunAsync(string[] args, CancellationToken ct);
 
-    /// <summary>
-    /// Runs a command and returns its stdout. A failing command (non zero exit) throws <see cref="SourceProblemException"/> with
-    /// the first line of its stderr. For <c>open</c> and <c>users</c>, whose answer is the point.
-    /// </summary>
-    Task<string> RunForOutputAsync(string[] args, CancellationToken ct);
-
     /// <summary><c>doctor --json --bench-dir PATH</c>. Read only.</summary>
     Task<DoctorReport> DoctorAsync(string benchPath, CancellationToken ct);
 
@@ -158,14 +152,14 @@ public sealed class ShimBenchSource : IBenchSource
     public const string NotFoundMessage =
         "benchbar.exe was not found. Put it next to BenchBarTray.exe or on PATH (benchbar.exe path install).";
 
+    public const string BlockedMessage =
+        "Windows blocked benchbar.exe. If SmartScreen or your antivirus asked, allow it, then try again.";
+
     /// <summary>up, down and restart wait for the bench: 3 minutes.</summary>
     public static readonly TimeSpan ActionTimeout = TimeSpan.FromSeconds(180);
 
     /// <summary>doctor and report run many checks: 2 minutes.</summary>
     public static readonly TimeSpan SlowReadTimeout = TimeSpan.FromSeconds(120);
-
-    /// <summary>open signs in through the site's login hooks; a cold sign-in under WSL can pass 30 seconds: 1 minute.</summary>
-    public static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>list, status and logs: 30 seconds.</summary>
     public static readonly TimeSpan ReadTimeout = TimeSpan.FromSeconds(30);
@@ -175,7 +169,6 @@ public sealed class ShimBenchSource : IBenchSource
     {
         "up" or "down" or "restart" => ActionTimeout,
         "report" or "doctor" => SlowReadTimeout,
-        "open" => OpenTimeout,
         _ => ReadTimeout,
     } : ReadTimeout;
 
@@ -232,15 +225,6 @@ public sealed class ShimBenchSource : IBenchSource
         {
             throw new CliProblemException($"benchbar.exe could not be started: {ex.Message}");
         }
-    }
-
-    public async Task<string> RunForOutputAsync(string[] args, CancellationToken ct)
-    {
-        var result = await RunCliAsync(args, ct).ConfigureAwait(false);
-        // stdout may hold a session id: only stderr is ever quoted
-        if (result.ExitCode != 0)
-            throw new CliProblemException(FirstLine(result.Error) ?? $"benchbar.exe exited with code {result.ExitCode}.");
-        return result.Output;
     }
 
     public async Task<DoctorReport> DoctorAsync(string benchPath, CancellationToken ct) =>
@@ -350,17 +334,6 @@ public sealed class FixtureBenchSource(string directory) : IBenchSource, ILoadSo
         return Task.FromResult(ActionResult.Success);
     }
 
-    /// <summary>Answers <c>open</c> from <c>open-as.json</c> and <c>users</c> from <c>users.json</c>; anything else is not a fixture command.</summary>
-    public async Task<string> RunForOutputAsync(string[] args, CancellationToken ct)
-    {
-        lock (_log) _log.Add(string.Join(' ', args));
-        var name = args.Length > 0 ? args[0] switch { "open" => "open-as.json", "users" => "users.json", _ => null } : null;
-        var file = name is null ? null : Path.Combine(Directory, name);
-        if (file is null || !File.Exists(file))
-            throw new CliProblemException($"The fixture folder has no answer for: {(args.Length > 0 ? args[0] : "(nothing)")}.");
-        return await File.ReadAllTextAsync(file, ct).ConfigureAwait(false);
-    }
-
     public async Task<DoctorReport> DoctorAsync(string benchPath, CancellationToken ct)
     {
         var file = Path.Combine(Directory, "doctor.json");
@@ -398,6 +371,13 @@ public static class BenchSourceFactory
 
     public static IBenchSource FromEnvironment() =>
         Fixtures is { } fixtures ? new FixtureBenchSource(fixtures) : new ShimBenchSource();
+
+    public static ISetupService SetupFromEnvironment() =>
+        Fixtures is { } fixtures ? new FixtureSetupService(fixtures) : new ShimSetupService();
+
+    /// <summary>The CLI client of the pages: the real shim, or with fixtures the recorded read only answers (see <see cref="FixtureCliRunner"/>).</summary>
+    public static ICliClient CliFromEnvironment() =>
+        Fixtures is { } fixtures ? new CliClient(new FixtureCliRunner(fixtures), () => "benchbar.exe") : new CliClient();
 
     /// <summary>The distro probe for the real source; null with fixtures, which have no distro.</summary>
     public static IDistroProbe? DistroProbeFromEnvironment() => Fixtures is null ? new WslDistroProbe() : null;

@@ -11,8 +11,13 @@ namespace BenchBar.Tray;
 /// One line per exception in <c>%LOCALAPPDATA%\BenchBar\tray.log</c>. The file is capped at 256 KB: past that it
 /// is moved to <c>tray.log.1</c> (replacing the old one). Never throws.
 /// </summary>
-internal sealed class ErrorLog(string? path = null, long maxBytes = 256 * 1024)
+internal sealed class ErrorLog(string? path = null, long maxBytes = 256 * 1024, Func<DateTime>? utcNow = null)
 {
+    /// <summary>The same exception from the same place inside this window is counted, not written again (a render loop can throw 35 times a second).</summary>
+    public static readonly TimeSpan RepeatWindow = TimeSpan.FromSeconds(60);
+
+    private readonly Func<DateTime> _now = utcNow ?? (() => DateTime.UtcNow);
+    private readonly Dictionary<string, (DateTime Written, int Suppressed)> _seen = [];
     private readonly string _path = path ?? System.IO.Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BenchBar", "tray.log");
     private readonly object _gate = new();
@@ -24,9 +29,24 @@ internal sealed class ErrorLog(string? path = null, long maxBytes = 256 * 1024)
         try
         {
             var text = ex.ToString().ReplaceLineEndings(" | ");
-            var line = string.Create(CultureInfo.InvariantCulture, $"{DateTime.UtcNow:yyyy-MM-ddTHH:mm:ssZ} {where}: {text}{Environment.NewLine}");
+            var now = _now();
+            var key = where + "|" + ex.GetType().FullName + "|" + ex.Message;
             lock (_gate)
             {
+                var suppressed = 0;
+                if (_seen.TryGetValue(key, out var earlier))
+                {
+                    if (now - earlier.Written < RepeatWindow)
+                    {
+                        _seen[key] = (earlier.Written, earlier.Suppressed + 1);
+                        return;
+                    }
+                    suppressed = earlier.Suppressed;
+                }
+                if (_seen.Count >= 64) _seen.Clear(); // bounded: a flood of different messages is capped by the file size
+                _seen[key] = (now, 0);
+                var note = suppressed > 0 ? $" (repeated {suppressed} more times since the last line)" : "";
+                var line = string.Create(CultureInfo.InvariantCulture, $"{now:yyyy-MM-ddTHH:mm:ssZ} {where}: {text}{note}{Environment.NewLine}");
                 var dir = System.IO.Path.GetDirectoryName(_path);
                 if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
                 if (File.Exists(_path) && new FileInfo(_path).Length + line.Length > maxBytes)
@@ -51,7 +71,11 @@ internal static class VsCode
     public const string HelpUrl = "https://code.visualstudio.com/docs/remote/wsl";
 
     /// <summary><c>code.cmd</c> on PATH, else the per user install; null when neither exists.</summary>
-    public static string? Find(string? pathVariable = null, string? localAppData = null, Func<string, bool>? exists = null)
+    public static string? Find(string? pathVariable = null, string? localAppData = null, Func<string, bool>? exists = null) =>
+        FindEditor(EditorKind.DefaultId, pathVariable, localAppData, exists);
+
+    /// <summary>The launcher of the chosen editor (<c>code.cmd</c>, <c>cursor.cmd</c>, <c>code-insiders.cmd</c>) on PATH, else its per user install; null when neither exists.</summary>
+    public static string? FindEditor(string editorId, string? pathVariable = null, string? localAppData = null, Func<string, bool>? exists = null)
     {
         exists ??= File.Exists;
         pathVariable ??= Environment.GetEnvironmentVariable("PATH");
@@ -59,12 +83,12 @@ internal static class VsCode
         var candidates = new List<string>();
         foreach (var dir in (pathVariable ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
             candidates.Add(dir.Trim().Trim('"'));
-        candidates.Add(Path.Combine(localAppData, "Programs", "Microsoft VS Code", "bin"));
+        candidates.Add(EditorKind.UserBinFolder(editorId, localAppData));
         foreach (var dir in candidates)
         {
             try
             {
-                var file = Path.Combine(dir, "code.cmd");
+                var file = Path.Combine(dir, EditorKind.CommandFile(editorId));
                 if (exists(file)) return file;
             }
             catch (ArgumentException) { }

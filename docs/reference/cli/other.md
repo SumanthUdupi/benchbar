@@ -211,13 +211,15 @@ user, with no password: the quickest way to check what a role sees and which
 workflow actions it gets. Without `--site`, the bench's default site;
 without `--path`, `/app` (or `/` for a Website User).
 
-`--as` works only on a site with `developer_mode` on (its `site_config.json`,
-else `common_site_config.json`), for Administrator too, only while the bench
+`--as` works only on a site you turned Open as on for
+([`benchbar site open-as on NAME`](site.md#site-open-as), in a terminal),
+with `developer_mode` on (its `site_config.json`, else
+`common_site_config.json`), for Administrator too, only while the bench
 runs, and only on the site the web process answers as: `bench serve` serves
 the `default_site` of `common_site_config.json` for every name, so on a
 bench with one that is the only site you can sign in on
 (`benchbar site default NAME`, then `benchrestart`, moves it;
-`site list --json` says where it works in `open_as`). Inside WSL the
+`site list --json` says where it works in `open_as`, and whether you turned it on in `open_as_enabled`). Inside WSL the
 browser is Windows', which reads its own hosts file, so `--as` opens only a
 `*.localhost` name itself; for another name add it to the Windows hosts
 file and open the `--print-url` link. Plain `open` (no `--as`) needs the
@@ -230,9 +232,18 @@ does not stay in the address bar. It stays in the browser's history and the
 web log, as with `bench browse`.
 
 What a sign-in does on the site, as a real login would: the user's
-`last_login` is updated, every app's `on_login` hook runs, and Frappe keeps
-only the newest sessions of that user (`simultaneous_sessions`, 2 by
-default), so an older one (another browser, a test run) can be signed out.
+`last_login` is updated, and every app's `on_login` and
+`on_session_creation` hooks run. With Frappe and ERPNext that means:
+
+- an Activity Log entry "USER logged in" for every switch;
+- a mail to the System Managers when you sign in as Administrator
+  (`notify_admin_access_to_system_manager`);
+- for a Website User, ERPNext can create a Customer or a Supplier
+  (`create_customer_or_supplier`, with the Portal Settings default role).
+
+Frappe keeps only the newest sessions of that user (`simultaneous_sessions`,
+2 by default), so an older one (another browser, a test run) can be signed
+out. `benchbar site open-as off` does not end the sessions already made.
 IP and login-hour restrictions on the user apply; two-factor login does not.
 A site with `deny_multiple_sessions` on signs that user out everywhere else.
 
@@ -242,7 +253,7 @@ the link holds the session id, so treat it like a password. `--json` without
 kept.
 
 Exit codes: 0 opened (or printed); 1 a refusal: no such site or user, a
-disabled user, the bench is stopped, the site is not in developer mode, the
+disabled user, Open as is off for the site, the bench is stopped, the site is not in developer mode, the
 site name does not resolve (`benchbar site hosts`), or Frappe refused the
 login.
 
@@ -257,7 +268,8 @@ benchbar open --site two.localhost --as Administrator --print-url
 benchbar users [--site NAME] [--search TEXT] [--limit N] [--json] [--bench-dir DIR]
 ```
 
-The enabled users of a site, to pick one for `open --as`: System Users
+The enabled users of a site, to pick one for `open --as` (refused while Open as
+is off for the site): System Users
 first, most recent login first, with up to five roles each (the automatic
 All, Guest and Desk User left out). `--search` matches the user id or full
 name; `--limit` is 1 to 500 (50 by default), and `truncated` in `--json`

@@ -404,7 +404,7 @@ so ⌘U does nothing while the bench runs.
 
 A menu bar app has `LSUIElement = true`: no Dock icon, and macOS treats
 its windows as second class (they open behind other apps). The pattern
-that works (`Settings/SettingsWindowController.swift`):
+that works (`Window/MainWindowController.swift`):
 
 1. On open: `NSApp.setActivationPolicy(.regular)`, which gives a Dock
    icon and a normal menu bar for as long as the window is open, then
@@ -462,7 +462,7 @@ The suite is off unless that folder exists.
 ### Files to read
 
 - `macos/BenchBar/Popover/PopoverView.swift`, `PopoverController.swift`, `BenchPresentation.swift`.
-- `macos/BenchBar/Settings/SettingsWindowController.swift`, `SettingsView.swift`, `LaunchAtLogin.swift`, `RunnerPreview.swift`.
+- `macos/BenchBar/Window/MainWindowController.swift`, `macos/BenchBar/Settings/SettingsView.swift`, `LaunchAtLogin.swift`, `RunnerPreview.swift`.
 - `macos/BenchBar/App/AppDelegate.swift` for the wiring and the click handling.
 - `macos/BenchBarTests/PresentationTests.swift`.
 
@@ -773,10 +773,3 @@ Read `App/AppDelegate.swift` (the menus), `Updates/UpdateCheck.swift`,
   busy state.
 - Preserve subprocess output on a failed batch: warnings from earlier successes
   must not hide the failing path or partial-completion details.
-
-## Open as a user
-
-- A browser caches a 301. `/login?redirect-to=PATH&sid=SID` answers 301, so a link opened twice is served from the cache and sets no cookie: nobody is signed in and no error shows. Every link needs its own `t=` value.
-- A session id is a credential that CLI error paths copy: `CLIError.invalidJSON` keeps the first 200 bytes of stdout as a recovery suggestion, and `.failed` keeps the last lines of stdout. For a command that prints a link, scrub both before they reach a view.
-- A hardened runtime app that sends Apple Events needs `com.apple.security.automation.apple-events` in its entitlements as well as `NSAppleEventsUsageDescription`; without the entitlement macOS denies the call silently and never shows the prompt.
-- `tell application "X"` launches X when it is not running: check `NSRunningApplication` first, or reading a tab starts a browser.

@@ -254,42 +254,39 @@ struct SitesSection: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(row.name).font(.callout).lineLimit(1).truncationMode(.middle).help(row.name)
                         Text(subtitle(row))
-                            .font(.caption).foregroundStyle(row.needsHosts ? .orange : .secondary)
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 4)
-                    OpenAsMenu(store: store, bench: bench, row: row, shortcuts: row.isDefault, compact: true) { findUser(row.name) }
+                    if row.isDefault {
+                        OpenAsMenu(store: store, bench: bench, row: row, compact: true) { findUser(row.name) }
+                    }
                     siteAction(row)
                 }
             }
-            OpenAsNoticeLine(store: store)
-            if SiteRow.hostsFix(rows, bench: bench.path) != nil {
-                Banner(systemImage: "network", tint: .orange,
-                       text: "A site has no /etc/hosts line, so its name does not resolve. Adding it asks for your password.", command: nil,
-                       action: ("Add Hosts Lines…", addHosts))
-            }
         }
     }
 
-    /// "as Priya" after an Open as, while the bench runs.
+    /// "as Priya" after an Open as, while the bench runs. A missing hosts line
+    /// is not said here: the Sites tab in the window has it, with Set Up….
     private func subtitle(_ row: SiteRow) -> String {
-        if row.needsHosts { return "Hostname setup needed" }
         guard bench.state == .running else { return "Bench is not running" }
-        return store.openAs.currentLabel(bench: bench.path, site: row.name).map { "as \($0)" } ?? "Running"
+        return store.openAsIfStarted?.currentLabel(bench: bench.path, site: row.name).map { "as \($0)" } ?? "Running"
     }
 
+    /// Open, where the name resolves: with a hosts line, or a `*.localhost`
+    /// name, which macOS resolves without one. Else nothing, and no message.
     @ViewBuilder private func siteAction(_ row: SiteRow) -> some View {
-        if row.isDefault { siteButton(row).shortcut(.openSite) }
-        else { siteButton(row) }
+        if row.popoverCanOpen {
+            if row.isDefault { siteButton(row).shortcut(.openSite) }
+            else { siteButton(row) }
+        }
     }
 
     private func siteButton(_ row: SiteRow) -> some View {
-        Button(row.needsHosts ? "Set Up…" : "Open") {
-            if row.needsHosts { addHosts() } else { Workspace.open(row.url) }
-        }
-        .controlSize(.small)
-        .disabled(!row.needsHosts && bench.state != .running)
-        .help(row.needsHosts ? "Add the hosts line for this site in the BenchBar window. Asks for your password."
-              : (row.isDefault ? BenchShortcut.openSite.help("Open \(row.url)") : row.url))
+        Button("Open") { Workspace.open(row.url) }
+            .controlSize(.small)
+            .disabled(bench.state != .running)
+            .help(row.isDefault ? BenchShortcut.openSite.help("Open \(row.url)") : row.url)
     }
 }
 
@@ -318,7 +315,8 @@ struct DoctorSection: View {
                     }
                     .buttonStyle(.borderless)
                     .help(bench.doctor == nil ? "Check health now (read only)" : "Check again (read only)")
-                    .accessibilityLabel("Check health again")
+                    .accessibilityLabel(bench.doctor == nil ? "Check health" : "Check health again")
+                    .accessibilityHint("Runs doctor, which only reads")
                     if bench.doctor?.checks.contains(where: { $0.level != .ok && $0.action != nil }) == true {
                         Button("Repair…", action: repair).controlSize(.small)
                             .help("Shows the repair plan in the BenchBar window; nothing changes until you confirm")
@@ -359,6 +357,7 @@ struct CompactCheckRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: check.level == .fail ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
                 .foregroundStyle(check.level == .fail ? .red : .orange).font(.caption)
+                .accessibilityLabel(check.level == .fail ? "Failure" : "Warning")
             VStack(alignment: .leading, spacing: 1) {
                 Text(check.label).font(.caption.weight(.medium))
                 Text(check.message).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(check.message)
@@ -380,6 +379,7 @@ struct CheckRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: icon).foregroundStyle(color).font(.caption)
+                .accessibilityLabel(check.level == .ok ? "Passing" : (check.level == .fail ? "Failure" : "Warning"))
             VStack(alignment: .leading, spacing: 2) {
                 Text(check.label).font(.caption.weight(.medium))
                 if check.level != .ok {
@@ -487,16 +487,18 @@ struct ActionButton: View {
     }
 }
 
-/// Behind the popover's content in light mode. macOS 26 draws the popover
-/// as clear glass, and with a dark window behind it the window's text showed
-/// through ours. Dark mode keeps the glass: light text stays readable on it.
+/// Behind the popover's content. macOS 26 draws the popover as clear glass,
+/// so whatever sits behind it shows through the text: a dark window's text in
+/// light mode, and in dark mode a white web page turned the glass light grey
+/// under white text. The window background colour at 92% (88% in dark mode,
+/// which keeps a little of the glass) keeps the text readable on either.
 struct PopoverBacking: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        if colorScheme == .light {
-            Color(nsColor: .windowBackgroundColor).opacity(0.92).ignoresSafeArea()
-        }
+        Color(nsColor: .windowBackgroundColor)
+            .opacity(colorScheme == .light ? 0.92 : 0.88)
+            .ignoresSafeArea()
     }
 }
 

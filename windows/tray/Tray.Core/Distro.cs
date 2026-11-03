@@ -7,6 +7,9 @@ namespace BenchBar.Tray.Core;
 public interface IDistroProbe
 {
     Task<bool> IsRunningAsync(string distro, CancellationToken ct);
+
+    /// <summary>Whether WSL has this distro at all (running or not). Asked only after <see cref="IsRunningAsync"/> said no; it must not start one. A probe that cannot tell says yes.</summary>
+    Task<bool> IsInstalledAsync(string distro, CancellationToken ct) => Task.FromResult(true);
 }
 
 /// <summary>
@@ -25,41 +28,18 @@ public sealed class WslDistroProbe(IProcessRunner? runner = null) : IDistroProbe
         return ParseRunning(result.Output).Contains(distro.Trim(), StringComparer.OrdinalIgnoreCase);
     }
 
+    public async Task<bool> IsInstalledAsync(string distro, CancellationToken ct)
+    {
+        var result = await _runner.RunAsync("wsl.exe", ["--list", "--quiet"], ct, TimeSpan.FromSeconds(10), Encoding.Unicode).ConfigureAwait(false);
+        // a failing list (no distro at all makes wsl.exe exit non zero with a sentence) lists nothing: the distro is not there
+        return ParseRunning(result.Output).Contains(distro.Trim(), StringComparer.OrdinalIgnoreCase);
+    }
+
     /// <summary>The names in the output, with the BOM, NULs and carriage returns removed and blank lines dropped.</summary>
     public static IReadOnlyList<string> ParseRunning(string output)
     {
         var text = output.Replace("\0", "").Replace("﻿", "").Replace("\r", "");
         return text.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
-    }
-}
-
-/// <summary>
-/// The check before any shim call that is not a poll: a snapshot can be minutes old and WSL idles a distro out, so the
-/// answer is asked fresh, and a call into the shim is never made for a distro that is not running (that would boot it).
-/// </summary>
-public static class DistroGuard
-{
-    public const string StoppedMessage = "The WSL distro is stopped. Start it from the BenchBar flyout first.";
-
-    /// <summary>
-    /// Null when the shim may be called: the distro runs, or there is no probe or no distro to ask about. Otherwise the line to show.
-    /// A probe that fails answers with the poller's own line. A cancelled <paramref name="ct"/> throws.
-    /// </summary>
-    public static async Task<string?> CheckAsync(IDistroProbe? probe, string? distro, CancellationToken ct)
-    {
-        if (probe is null || string.IsNullOrWhiteSpace(distro)) return null;
-        try
-        {
-            return await probe.IsRunningAsync(distro.Trim(), ct).ConfigureAwait(false) ? null : StoppedMessage;
-        }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            return ex is System.ComponentModel.Win32Exception ? BenchPoller.WslMissingMessage : BenchPoller.WslSilentMessage;
-        }
     }
 }
 

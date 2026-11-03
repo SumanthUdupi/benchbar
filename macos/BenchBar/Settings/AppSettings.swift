@@ -19,8 +19,6 @@ final class AppSettings {
         static let editorBundleID = "editorBundleID"
         static let checkUpdatesAutomatically = "checkUpdatesAutomatically"
         static let walkthroughSeen = "walkthroughSeen"
-        static let openAsKeepPage = "openAsKeepPage"
-        static let quickSwitchEnabled = "quickSwitchEnabled"
     }
 
     @ObservationIgnored private let defaults: UserDefaults
@@ -32,7 +30,7 @@ final class AppSettings {
     var scanFolder: String { didSet { defaults.set(scanFolder, forKey: Key.scanFolder) } }
     /// The file picker for the CLI is shown at most once automatically.
     var askedForCLI: Bool { didSet { defaults.set(askedForCLI, forKey: Key.askedForCLI) } }
-    /// Built in ("bench", "cup") or a custom runner folder name.
+    /// A built in id (Runner.builtIns: "bench", "cup", "kettle" and so on) or a custom runner folder name.
     var runnerID: String { didSet { defaults.set(runnerID, forKey: Key.runnerID) } }
     /// Off: the running animation keeps one steady speed.
     var speedEnabled: Bool { didSet { defaults.set(speedEnabled, forKey: Key.speedEnabled) } }
@@ -47,22 +45,6 @@ final class AppSettings {
 
     /// The walkthrough has been shown once on its own (never again after that).
     var walkthroughSeen: Bool { didSet { defaults.set(walkthroughSeen, forKey: Key.walkthroughSeen) } }
-
-    /// Open as sends the browser's current tab to the new session instead of
-    /// opening a tab. Off by default: it needs macOS's Automation permission.
-    var keepPage: Bool { didSet { defaults.set(keepPage, forKey: Key.openAsKeepPage) } }
-
-    /// ⌃⌥U opens the Quick Switch panel from any app. On unless turned off.
-    var quickSwitchEnabled: Bool {
-        didSet {
-            defaults.set(quickSwitchEnabled, forKey: Key.quickSwitchEnabled)
-            onQuickSwitchChange?()
-        }
-    }
-    /// Another app holds ⌃⌥U, so Quick Switch is off. Not stored: the next launch asks the system again.
-    var quickSwitchConflict = false
-    /// The hot key follows the setting (QuickSwitchController.sync).
-    @ObservationIgnored var onQuickSwitchChange: (() -> Void)?
 
     /// The editors that are installed. Launch Services answers from disk, so
     /// it is asked once at launch and again when any app launches or quits
@@ -93,8 +75,6 @@ final class AppSettings {
         editorBundleID = defaults.string(forKey: Key.editorBundleID) ?? ""
         checkUpdatesAutomatically = defaults.bool(forKey: Key.checkUpdatesAutomatically)
         walkthroughSeen = defaults.bool(forKey: Key.walkthroughSeen)
-        keepPage = defaults.bool(forKey: Key.openAsKeepPage)
-        quickSwitchEnabled = defaults.object(forKey: Key.quickSwitchEnabled) as? Bool ?? true
         installedEditors = findEditors()
         let workspace = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {

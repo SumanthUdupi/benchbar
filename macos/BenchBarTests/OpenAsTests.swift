@@ -55,18 +55,9 @@ nonisolated final class GatedOpenAsCLI: OpenAsCLI, @unchecked Sendable {
 }
 
 final class FakeBrowser: BrowserOpening {
-    var tabControlIssue: TabControlIssue?
     var opened: [URL] = []
-    var replaced: [URL] = []
-    var tab: URL?
-    var replaceSucceeds = true
 
     func open(_ url: URL) { opened.append(url) }
-    func frontTabURL() async -> URL? { tab }
-    func replaceFrontTab(with url: URL) async -> Bool {
-        replaced.append(url)
-        return replaceSucceeds
-    }
 }
 
 @Suite("Open as")
@@ -79,9 +70,9 @@ struct OpenAsTests {
         try #require(UserDefaults(suiteName: "benchbar-open-as-\(UUID().uuidString)"))
     }
 
-    func makeStore(defaults: UserDefaults? = nil, browser: FakeBrowser = FakeBrowser(), keepPage: Bool = false,
+    func makeStore(defaults: UserDefaults? = nil, browser: FakeBrowser = FakeBrowser(),
                check: @escaping @Sendable (URL, String) async -> String? = { _, _ in nil }) throws -> OpenAsStore {
-        OpenAsStore(defaults: try defaults ?? scratchDefaults(), keepPage: { keepPage }, browser: browser, checkSession: check)
+        OpenAsStore(defaults: try defaults ?? scratchDefaults(), browser: browser, checkSession: check)
     }
 
     func switchTo(_ user: String, on store: OpenAsStore, cli: any OpenAsCLI, path: String? = nil) async -> String? {
@@ -218,6 +209,21 @@ struct OpenAsTests {
         #expect(cli.opens.count == 1)
     }
 
+    @Test func aSiteNoLongerUsableLosesItsCachedSessions() async throws {
+        let cli = FakeOpenAsCLI()
+        let store = try makeStore(check: { _, _ in "priya@example.com" })
+        _ = await switchTo("priya@example.com", on: store, cli: cli)
+        // another site of the bench, and another bench's macdev, keep theirs
+        store.forgetSessions(bench: "/Users/you/other-bench", keeping: [])
+        store.forgetSessions(bench: bench, keeping: [site])
+        _ = await switchTo("priya@example.com", on: store, cli: cli)
+        #expect(cli.opens.count == 1)
+        // Open as off on macdev: the next switch asks the CLI, which refuses there
+        store.forgetSessions(bench: bench, keeping: [])
+        _ = await switchTo("priya@example.com", on: store, cli: cli)
+        #expect(cli.opens.count == 2)
+    }
+
     @Test func aSessionOfAnotherUserIsNotReused() async throws {
         let cli = FakeOpenAsCLI()
         let store = try makeStore(check: { _, _ in "someone.else@example.com" })
@@ -272,25 +278,6 @@ struct OpenAsTests {
         #expect(store.lastError(afterSwitchOn: bench, current: "no session", error: nil) == nil)
         #expect(store.lastError(afterSwitchOn: bench, current: "start failed", error: nil) == "start failed")
         #expect(store.lastError(afterSwitchOn: "/other", current: "no session", error: nil) == "no session")
-    }
-
-    @Test func aBrowserProblemIsNotedOnceAndOnlyWithKeepThePageOn() async throws {
-        let browser = FakeBrowser()
-        browser.tabControlIssue = .automationDenied(browser: "Google Chrome")
-        let cli = FakeOpenAsCLI()
-        let off = try makeStore(browser: browser, keepPage: false)
-        _ = await switchTo("a@x.com", on: off, cli: cli)
-        #expect(off.notice == nil)
-
-        let store = try makeStore(browser: browser, keepPage: true)
-        _ = await switchTo("a@x.com", on: store, cli: cli)
-        #expect(store.notice == "Keep the page I'm on needs permission to control Google Chrome: System Settings → Privacy & Security → Automation")
-        store.dismissNotice()
-        _ = await switchTo("a@x.com", on: store, cli: cli)
-        #expect(store.notice == nil, "the same cause is told once per run")
-        browser.tabControlIssue = .firefox
-        _ = await switchTo("a@x.com", on: store, cli: cli)
-        #expect(store.notice?.hasPrefix("Firefox always gets a new tab") == true)
     }
 
     @Test func theSessionIDIsNotInUserDefaults() async throws {
@@ -368,7 +355,7 @@ struct OpenAsTests {
 
     // MARK: the menu
 
-    @Test func theMenuIsInTheDocumentedOrderWithDigitsFromThePinIndexes() {
+    @Test func theMenuIsInTheDocumentedOrder() {
         let pins = [PinnedUser(user: "rahul@x.com", label: "CS", fullName: "Rahul Sharma"),
                     PinnedUser(user: "priya@x.com", label: nil, fullName: "Priya Nair"),
                     PinnedUser(user: "arun@x.com", label: nil, fullName: nil)]
@@ -376,20 +363,19 @@ struct OpenAsTests {
         #expect(OpenAsMenuModel.items(pins: pins, recents: recents) == [
             .switchBack(user: "priya@x.com", title: "Switch Back to Priya Nair"),
             .divider(1),
-            .pin(user: "rahul@x.com", title: "CS — rahul@x.com", fullName: "Rahul Sharma", shortcut: .openAs(1)),
-            .pin(user: "priya@x.com", title: "Priya Nair — priya@x.com", fullName: "Priya Nair", shortcut: .openAs(2)),
-            .pin(user: "arun@x.com", title: "arun@x.com", fullName: nil, shortcut: .openAs(3)),
+            .pin(user: "rahul@x.com", title: "CS (rahul@x.com)", fullName: "Rahul Sharma"),
+            .pin(user: "priya@x.com", title: "Priya Nair (priya@x.com)", fullName: "Priya Nair"),
+            .pin(user: "arun@x.com", title: "arun@x.com", fullName: nil),
             .administrator,
             .divider(2),
             .findUser,
-            .keepPage,
         ])
     }
 
     @Test func withNoPinsTheMenuSaysHowToPin() {
         #expect(OpenAsMenuModel.noPinsHint == "Pin people from Find User… to switch to them here")
         let items = OpenAsMenuModel.items(pins: [], recents: [])
-        #expect(items == [.administrator, .pinHint, .divider(2), .findUser, .keepPage])
+        #expect(items == [.administrator, .pinHint, .divider(2), .findUser])
         let pinned = OpenAsMenuModel.items(pins: [PinnedUser(user: "a@x.com", label: nil)], recents: [])
         #expect(!pinned.contains(.pinHint))
     }
@@ -414,154 +400,7 @@ struct OpenAsTests {
         #expect(!items.contains { if case .pin = $0 { true } else { false } })
     }
 
-    @Test func theMenuIsUsableOnlyOnARunningDeveloperModeDefaultSiteWithAHostsLine() {
-        let ready = SiteRow(name: "macdev", isDefault: true, url: siteURL, needsHosts: false, developerMode: true)
-        #expect(OpenAsMenuModel.isAvailable(ready, benchRunning: true))
-        #expect(!OpenAsMenuModel.isAvailable(ready, benchRunning: false))
-        var production = ready
-        production.developerMode = false
-        #expect(!OpenAsMenuModel.isAvailable(production, benchRunning: true))
-        var unresolved = ready
-        unresolved.needsHosts = true
-        #expect(!OpenAsMenuModel.isAvailable(unresolved, benchRunning: true))
-    }
-
-    @Test func aSiteThatIsNotTheDefaultHasNoOpenAsBecausePortServesOnlyTheDefault() {
-        let second = SiteRow(name: "second", isDefault: false, url: "http://second:8000", needsHosts: false, developerMode: true)
-        #expect(!OpenAsMenuModel.isAvailable(second, benchRunning: true))
-        #expect(OpenAsMenuModel.availability(second, benchRunning: true) == .notDefaultSite)
-        #expect(OpenAsMenuModel.notDefaultSiteHelp == "Open as works on the default site; port 8000 serves only it")
-        // the CLI's open_as wins over BenchBar's default flag, which a hand-run `bench use` leaves behind
-        var served = second
-        served.openAs = true
-        #expect(OpenAsMenuModel.availability(served, benchRunning: true) == .available)
-        var stale = SiteRow(name: "macdev", isDefault: true, url: siteURL, needsHosts: false, developerMode: true)
-        stale.openAs = false
-        #expect(OpenAsMenuModel.availability(stale, benchRunning: true) == .notDefaultSite)
-    }
-
-    @Test func openAsDecodesAndAnOlderCLIGivesNil() throws {
-        let fresh = try JSONDecoder().decode(SiteInfo.self, from: Data(#"{"name":"m","default":true,"hosts_entry":true,"ping_code":null,"developer_mode":true,"open_as":true}"#.utf8))
-        #expect(fresh.openAs == true)
-        let old = try JSONDecoder().decode(SiteInfo.self, from: Data(#"{"name":"m","default":true,"hosts_entry":true,"ping_code":null}"#.utf8))
-        #expect(old.openAs == nil)
-    }
-
-    @Test func eachReasonTheControlIsDisabledHasItsOwnHelpText() {
-        let ready = SiteRow(name: "macdev", isDefault: true, url: siteURL, needsHosts: false, developerMode: true)
-        func help(_ row: SiteRow, running: Bool = true) -> String? {
-            OpenAsMenuModel.disabledHelp(OpenAsMenuModel.availability(row, benchRunning: running), site: row.name, bench: "frappe-bench")
-        }
-        #expect(help(ready) == nil)
-        #expect(help(ready, running: false) == "Start frappe-bench first")
-        var off = ready
-        off.developerMode = false
-        #expect(help(off) == "Turn on developer_mode for macdev to use Open as")
-        var old = off
-        old.developerModeKnown = false
-        #expect(help(old) == "Update the benchbar CLI to use Open as")
-        var hosts = ready
-        hosts.needsHosts = true
-        #expect(OpenAsMenuModel.availability(hosts, benchRunning: true) == .needsHosts)
-        #expect(help(hosts) == nil, "Set Up… is the action there")
-    }
-
-    @Test func theShortcutsAreCommandDigitsAndShiftCommandO() {
-        #expect(OpenAsShortcut.openAs(0).display == "⌘0" && OpenAsShortcut.openAs(7).display == "⌘7")
-        #expect(OpenAsShortcut.switchBack.display == "⌘⇧O")
-        #expect(OpenAsShortcut.switchBack.key == "o" && OpenAsShortcut.switchBack.usesShift && !OpenAsShortcut.openAs(1).usesShift)
-        #expect(BenchShortcut.openSite.display == "⌘O")
-    }
-
     // MARK: the browser
-
-    @Test func keepThePageOnPassesTheTabsPathAndSendsTheTabToTheNewUser() async throws {
-        let browser = FakeBrowser()
-        browser.tab = URL(string: "http://macdev:8000/app/nst/NST-1?x=1#y")
-        let cli = FakeOpenAsCLI()
-        let store = try makeStore(browser: browser, keepPage: true)
-        #expect(await switchTo("priya@example.com", on: store, cli: cli) == nil)
-        #expect(cli.opens.first?.path == "/app/nst/NST-1?x=1#y")
-        #expect(browser.replaced.count == 1 && browser.opened.isEmpty)
-    }
-
-    @Test func aTabThatCannotBeReplacedFallsBackToOpeningTheLink() async throws {
-        let browser = FakeBrowser()
-        browser.tab = URL(string: "http://macdev:8000/app/nst")
-        browser.replaceSucceeds = false
-        let store = try makeStore(browser: browser, keepPage: true)
-        _ = await switchTo("priya@example.com", on: store, cli: FakeOpenAsCLI())
-        #expect(browser.replaced.count == 1 && browser.opened.count == 1)
-    }
-
-    @Test func aTabOnAnotherSiteOrWithTheSettingOffOpensANewTab() async throws {
-        let other = FakeBrowser()
-        other.tab = URL(string: "http://other:8000/app/x")
-        let cli = FakeOpenAsCLI()
-        _ = await switchTo("a@x.com", on: try makeStore(browser: other, keepPage: true), cli: cli)
-        #expect(cli.opens.last?.path == nil && other.replaced.isEmpty && other.opened.count == 1)
-
-        let off = FakeBrowser()
-        off.tab = URL(string: "http://macdev:8000/app/x")
-        _ = await switchTo("a@x.com", on: try makeStore(browser: off, keepPage: false), cli: cli)
-        #expect(cli.opens.last?.path == nil && off.replaced.isEmpty && off.opened.count == 1)
-    }
-
-    @Test func aTabIsOnTheSiteOnlyWithTheSameSchemeHostAndPort() throws {
-        let site = try #require(URL(string: siteURL))
-        func matches(_ text: String) -> Bool { BrowserRouter.matches(tabURL: URL(string: text)!, siteURL: site) }
-        #expect(matches("http://macdev:8000/app/nst"))
-        #expect(matches("http://MacDev:8000/"))
-        #expect(!matches("http://macdev:8001/app"))
-        #expect(!matches("http://other:8000/app"))
-        #expect(!matches("https://macdev:8000/app"))
-        #expect(!matches("http://macdev/app"))
-        // 127.0.0.1 and localhost on the bench's port serve its default site, and only that one
-        #expect(!matches("http://127.0.0.1:8000/app"))
-        #expect(BrowserRouter.matches(tabURL: URL(string: "http://127.0.0.1:8000/app")!, siteURL: site, isDefaultSite: true))
-        #expect(BrowserRouter.matches(tabURL: URL(string: "http://localhost:8000/app")!, siteURL: site, isDefaultSite: true))
-        #expect(!BrowserRouter.matches(tabURL: URL(string: "http://127.0.0.1:8001/app")!, siteURL: site, isDefaultSite: true))
-        #expect(!BrowserRouter.matches(tabURL: URL(string: "http://10.0.0.5:8000/app")!, siteURL: site, isDefaultSite: true))
-    }
-
-    @Test func aTabOn127001KeepsItsHostAndPageForTheDefaultSite() async throws {
-        let browser = FakeBrowser()
-        browser.tab = URL(string: "http://127.0.0.1:8000/app/nst/NST-1")
-        let cli = FakeOpenAsCLI()
-        let store = try makeStore(browser: browser, keepPage: true)
-        #expect(await store.switchTo(user: "priya@example.com", bench: bench, site: site, siteURL: siteURL, path: nil,
-                                     isDefaultSite: true, client: cli) == nil)
-        #expect(cli.opens.first?.path == "/app/nst/NST-1")
-        let link = try #require(browser.replaced.first)
-        #expect(link.host == "127.0.0.1" && link.port == 8000 && link.path == "/login")
-        #expect(browser.opened.isEmpty)
-        // the same tab on a site that is not the default one is left alone: a new tab at the site's own name
-        let other = FakeBrowser()
-        other.tab = URL(string: "http://127.0.0.1:8000/app/nst/NST-1")
-        let notDefault = try makeStore(browser: other, keepPage: true)
-        _ = await notDefault.switchTo(user: "priya@example.com", bench: bench, site: site, siteURL: siteURL, path: nil,
-                                      isDefaultSite: false, client: FakeOpenAsCLI())
-        #expect(other.replaced.isEmpty && other.opened.first?.host != "127.0.0.1")
-    }
-
-    @Test func theTabsPathKeepsItsQueryAndFragment() throws {
-        #expect(BrowserRouter.path(of: try #require(URL(string: "http://macdev:8000/app/nst/NST-1?x=1#y"))) == "/app/nst/NST-1?x=1#y")
-        #expect(BrowserRouter.path(of: try #require(URL(string: "http://macdev:8000"))) == "/")
-        #expect(BrowserRouter.path(of: try #require(URL(string: "http://macdev:8000/app/a%20b?q=%26"))) == "/app/a%20b?q=%26")
-    }
-
-    @Test func theScriptsUseTheBundleIDAndEscapeTheAddress() {
-        #expect(BrowserRouter.readScript(bundleID: BrowserRouter.safari)
-                == "with timeout of 3 seconds\n" + #"tell application id "com.apple.Safari" to get URL of front document"# + "\nend timeout")
-        #expect(BrowserRouter.readScript(bundleID: "com.google.Chrome")?.contains(#"tell application id "com.google.Chrome" to get URL of active tab of front window"#) == true)
-        #expect(BrowserRouter.readScript(bundleID: BrowserRouter.firefox) == nil)
-        #expect(BrowserRouter.readScript(bundleID: "com.example.Unknown") == nil)
-        #expect(BrowserRouter.replaceScript(bundleID: BrowserRouter.safari, url: "http://macdev:8000/app")?
-                .contains(#"tell application id "com.apple.Safari" to set URL of front document to "http://macdev:8000/app""#) == true)
-        let script = BrowserRouter.replaceScript(bundleID: "com.brave.Browser", url: "http://h/a\"b\\c\nd") ?? ""
-        #expect(script.hasSuffix(#"to "http://h/a\"b\\cd""# + "\nend timeout"))
-        #expect(script.split(separator: "\n").count == 3, "a line break in the address cannot add a line to the script")
-    }
 
     @Test func theTestingBrowserIsTheLastOneUsedElseTheFirstRunningSupportedOne() {
         let chrome = "com.google.Chrome"
@@ -576,17 +415,111 @@ struct OpenAsTests {
         #expect(BrowserRouter.browser(testing: nil, running: [BrowserRouter.safari], defaultBrowser: chrome) == BrowserRouter.safari)
     }
 
-    @Test func theBrowserNoteNamesTheBrowserAndTheSettingsPath() {
-        #expect(BrowserRouter.displayName("com.google.Chrome") == "Google Chrome")
-        #expect(BrowserRouter.displayName(BrowserRouter.safari) == "Safari")
-        #expect(TabControlIssue.automationDenied(browser: "Safari").note.hasSuffix("System Settings → Privacy & Security → Automation"))
-    }
-
     @Test func onlyTheSupportedBrowsersAreTracked() {
         for id in ["com.apple.Safari", "com.google.Chrome", "company.thebrowser.Browser", "com.brave.Browser", "com.microsoft.edgemac", "org.mozilla.firefox"] {
             #expect(BrowserRouter.supportedID(id) == id)
         }
         #expect(BrowserRouter.supportedID("com.apple.finder") == nil)
+    }
+
+    // MARK: the opt-in
+
+    func optedIn(_ name: String = "macdev", isDefault: Bool = true, developerMode: Bool = true, openAs: Bool? = true) -> SiteRow {
+        SiteRow(name: name, isDefault: isDefault, url: "http://\(name):8000", needsHosts: false,
+                developerMode: developerMode, openAsEnabled: true, openAs: openAs)
+    }
+
+    @Test func siteInfoDecodesTheOptInAndAnOlderCLIGivesNil() throws {
+        let sent = #"{"name":"m","default":true,"hosts_entry":true,"ping_code":null,"developer_mode":true,"open_as_enabled":true,"open_as":false}"#
+        let info = try JSONDecoder().decode(SiteInfo.self, from: Data(sent.utf8))
+        #expect(info.openAsEnabled == true && info.openAs == false)
+        let old = try JSONDecoder().decode(SiteInfo.self, from: Data(#"{"name":"m","default":true,"hosts_entry":true,"ping_code":null}"#.utf8))
+        #expect(old.openAsEnabled == nil && old.openAs == nil)
+        #expect(SiteRow.make(sites: [info], defaultSite: "m", port: 8000).first?.openAsEnabled == true)
+    }
+
+    @Test func theMenuShowsOnlyWhereTheCLISaysOpenAsWorks() {
+        #expect(OpenAsMenuModel.availability(optedIn(), benchRunning: true, benchName: "b") == .available)
+        #expect(OpenAsMenuModel.availability(optedIn(), benchRunning: false, benchName: "frappe-bench") == .disabled("Start frappe-bench first"))
+        var off = optedIn()
+        off.openAsEnabled = false
+        #expect(OpenAsMenuModel.availability(off, benchRunning: true, benchName: "b") == .hidden)
+        off.openAsEnabled = nil
+        #expect(OpenAsMenuModel.availability(off, benchRunning: true, benchName: "b") == .hidden, "an older CLI")
+        var hosts = optedIn()
+        hosts.needsHosts = true
+        #expect(OpenAsMenuModel.availability(hosts, benchRunning: true, benchName: "b") == .hidden)
+    }
+
+    @Test func anOptedInDefaultSiteThatCannotBeUsedIsDisabledWithTheReason() {
+        let production = optedIn(developerMode: false, openAs: false)
+        guard case .disabled(let reason) = OpenAsMenuModel.availability(production, benchRunning: true, benchName: "b") else {
+            Issue.record("expected a disabled control")
+            return
+        }
+        #expect(reason == "macdev is not in developer mode. Run: bench --site macdev set-config developer_mode 1")
+        let elsewhere = optedIn(openAs: false)
+        #expect(OpenAsMenuModel.availability(elsewhere, benchRunning: true, benchName: "b")
+                == .disabled("The web process answers as another site. Run: benchbar site default macdev, then benchrestart"))
+    }
+
+    @Test func anOptedInSiteThatIsNotTheDefaultHasNoMenuAndTheSitesTabSaysWhy() {
+        let second = optedIn("second", isDefault: false, openAs: false)
+        #expect(OpenAsMenuModel.availability(second, benchRunning: true, benchName: "b") == .hidden)
+        let line = OpenAsMenuModel.statusLine(second)
+        #expect(line?.warning == true)
+        #expect(line?.text == "Open as is on, but not usable. Only the default site can be used: port 8000 serves only it")
+        let both = OpenAsMenuModel.statusLine(optedIn("second", isDefault: false, developerMode: false, openAs: false))
+        #expect(both?.text.contains("set-config developer_mode 1") == true && both?.text.contains("Only the default site") == true)
+        // the CLI's open_as wins over BenchBar's default flag, which a hand-run `bench use` leaves behind
+        #expect(OpenAsMenuModel.availability(optedIn("second", isDefault: false, openAs: true), benchRunning: true, benchName: "b") == .available)
+    }
+
+    @Test func theStatusLineIsAbsentWhileOpenAsIsOffAndPlainWhileItWorks() {
+        var off = optedIn()
+        off.openAsEnabled = false
+        #expect(OpenAsMenuModel.statusLine(off) == nil)
+        #expect(OpenAsMenuModel.statusLine(optedIn())?.text == "Open as is on")
+        #expect(OpenAsMenuModel.statusLine(optedIn())?.warning == false)
+    }
+
+    @Test func theAlertSaysWhatASignInDoes() {
+        let text = OpenAsMenuModel.allowMessage
+        for part in ["without a password", "on_login and on_session_creation hooks", "Activity Log", "System Managers", "last_login", "oldest session", "development sites only"] {
+            #expect(text.contains(part), "\(part)")
+        }
+    }
+
+    @Test func setOpenAsRunsTheCLIWithYesAndNeverInheritsNonInteractive() async throws {
+        let runner = FakeRunner { _ in .ok("") }
+        let client = CLIClient(executable: URL(fileURLWithPath: "/bin/benchbar"), runner: runner)
+        try await client.setOpenAs(true, site: "macdev", bench: bench)
+        try await client.setOpenAs(false, site: "macdev", bench: bench)
+        let calls = runner.calls
+        #expect(calls[0].arguments == ["site", "open-as", "on", "macdev", "--yes", "--plain", "--bench-dir", bench])
+        #expect(calls[1].arguments == ["site", "open-as", "off", "macdev", "--plain", "--bench-dir", bench])
+        #expect(calls.allSatisfy { $0.environment["BENCHBAR_NONINTERACTIVE"] == "0" })
+        #expect(calls.allSatisfy { $0.environment["BENCHBAR_SUDO"] == "gui" })
+    }
+
+    @Test func pinsOfGoneBenchesAndSitesArePruned() throws {
+        let defaults = try scratchDefaults()
+        let store = try makeStore(defaults: defaults)
+        store.pin("a@x.com", fullName: nil, bench: bench, site: "macdev")
+        store.pin("b@x.com", fullName: nil, bench: bench, site: "second")
+        store.pin("c@x.com", fullName: nil, bench: "/gone", site: "macdev")
+        store.pin("d@x.com", fullName: nil, bench: "/unknown", site: "macdev")
+        store.prune(keeping: [bench: ["macdev"], "/unknown": nil])
+        #expect(store.pins(bench: bench, site: "macdev").count == 1)
+        #expect(store.pins(bench: bench, site: "second").isEmpty, "the site was dropped")
+        #expect(store.pins(bench: "/gone", site: "macdev").isEmpty, "the bench is gone")
+        #expect(store.pins(bench: "/unknown", site: "macdev").count == 1, "sites not known now: pins stay")
+        #expect(try makeStore(defaults: defaults).pins(bench: "/gone", site: "macdev").isEmpty, "saved")
+    }
+
+    @Test func noDashesAppearInAPinTitle() {
+        let items = OpenAsMenuModel.items(pins: [PinnedUser(user: "r@x.com", label: "CS")], recents: [])
+        #expect(items.contains(.pin(user: "r@x.com", title: "CS (r@x.com)", fullName: nil)))
     }
 
     // MARK: the session check

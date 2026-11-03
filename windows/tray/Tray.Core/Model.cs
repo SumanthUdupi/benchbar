@@ -6,21 +6,8 @@ namespace BenchBar.Tray.Core;
 /// <summary>The bench states of <c>status --json</c> (docs/json-schema.md, States).</summary>
 public enum BenchState { Unknown, Stopped, Starting, Running, Crashed, Paused }
 
-/// <summary>
-/// A site of a bench (<c>sites[]</c> in <c>status --json</c>). Other fields of the CLI are ignored.
-/// <paramref name="DeveloperMode"/> is false when the CLI is too old to report it, which hides "Open as…".
-/// </summary>
-public sealed record SiteInfo(string Name, bool IsDefault, bool DeveloperMode = false, bool? OpenAs = null)
-{
-    /// <summary>
-    /// "Open as…" works on the default site only: the bench serves its web port with no <c>--site</c>, so the port answers for
-    /// the bench's default site whatever Host the browser sends, and a session made in any other site's database
-    /// would land logged out.
-    /// </summary>
-    /// <remarks><paramref name="OpenAs"/> is the CLI's own answer (it reads the site the web port serves); the default-site
-    /// rule is the fallback for a CLI older than that field.</remarks>
-    public bool CanOpenAs => OpenAs ?? (IsDefault && DeveloperMode);
-}
+/// <summary>A site of a bench (<c>sites[]</c> in <c>status --json</c>). Other fields of the CLI are ignored.</summary>
+public sealed record SiteInfo(string Name, bool IsDefault);
 
 /// <summary>
 /// One bench as <c>status --json</c> reports it. <see cref="Site"/> is null for a bench that has none
@@ -43,11 +30,14 @@ public sealed record BenchStatus(
 
     public IReadOnlyList<SiteInfo> Sites { get; init; } = [];
 
-    /// <summary>The sites "Open as…" and Quick Switch may target: at most one, the default site in developer mode.</summary>
-    public IReadOnlyList<SiteInfo> OpenAsSites => [.. Sites.Where(s => s.CanOpenAs)];
-
     /// <summary>Why this one bench could not be read (its status call failed); null when it answered. Shown under its row.</summary>
     public string? Problem { get; init; }
+
+    /// <summary><c>scheduler</c> in the JSON: <c>Procfile.lean</c> runs <c>bench schedule</c>. Null for a CLI older than 0.4.</summary>
+    public bool? Scheduler { get; init; }
+
+    /// <summary><c>started_at</c> in the JSON: when the current (or last) run started. Null when the CLI gave none.</summary>
+    public DateTimeOffset? StartedAt { get; init; }
 }
 
 /// <summary>One bench from <c>list --json</c> (<c>benches[]</c>).</summary>
@@ -55,14 +45,15 @@ public sealed record BenchEntry(string Name, string Path, bool IsDefault, string
 
 /// <summary>
 /// What one poll found: the benches, or why there are none. With <see cref="DistroStopped"/> the poller
-/// asked nothing of the CLI (that would boot the distro). <see cref="Problem"/> is the one line the shim
+/// asked nothing of the CLI (that would boot the distro). With <see cref="DistroMissing"/> as well, WSL does not have the distro at all. <see cref="Problem"/> is the one line the shim
 /// or the tray printed for a setup or CLI failure, to show as it is.
 /// </summary>
 public sealed record TraySnapshot(
     IReadOnlyList<BenchStatus> Benches,
     bool DistroStopped = false,
     string? Distro = null,
-    string? Problem = null)
+    string? Problem = null,
+    bool DistroMissing = false)
 {
     public static TraySnapshot Empty { get; } = new([]);
 }
@@ -142,14 +133,14 @@ internal sealed class StatusDto
     [JsonPropertyName("web_url")] public string? WebUrl { get; set; }
     [JsonPropertyName("log")] public string? Log { get; set; }
     [JsonPropertyName("sites")] public List<SiteDto>? Sites { get; set; }
+    [JsonPropertyName("scheduler")] public bool? Scheduler { get; set; }
+    [JsonPropertyName("started_at")] public string? StartedAt { get; set; }
 }
 
 internal sealed class SiteDto
 {
     [JsonPropertyName("name")] public string? Name { get; set; }
     [JsonPropertyName("default")] public bool? Default { get; set; }
-    [JsonPropertyName("developer_mode")] public bool? DeveloperMode { get; set; }
-    [JsonPropertyName("open_as")] public bool? OpenAs { get; set; }
 }
 
 internal sealed class ListDto
@@ -204,52 +195,11 @@ internal sealed class ReportDto
     [JsonPropertyName("zip")] public string? Zip { get; set; }
 }
 
-internal sealed class OpenAsDto
-{
-    [JsonPropertyName("site")] public string? Site { get; set; }
-    [JsonPropertyName("user")] public string? User { get; set; }
-    [JsonPropertyName("full_name")] public string? FullName { get; set; }
-    [JsonPropertyName("user_type")] public string? UserType { get; set; }
-    [JsonPropertyName("path")] public string? Path { get; set; }
-    [JsonPropertyName("url")] public string? Url { get; set; }
-}
-
-internal sealed class UserListDto
-{
-    [JsonPropertyName("site")] public string? Site { get; set; }
-    [JsonPropertyName("users")] public List<UserDto?>? Users { get; set; }
-    [JsonPropertyName("truncated")] public bool? Truncated { get; set; }
-}
-
-internal sealed class UserDto
-{
-    [JsonPropertyName("name")] public string? Name { get; set; }
-    [JsonPropertyName("full_name")] public string? FullName { get; set; }
-    [JsonPropertyName("user_type")] public string? UserType { get; set; }
-    [JsonPropertyName("roles")] public List<string?>? Roles { get; set; }
-    [JsonPropertyName("role_count")] public int? RoleCount { get; set; }
-    [JsonPropertyName("last_login")] public string? LastLogin { get; set; }
-}
-
-/// <summary>
-/// <c>open --print-url --json</c>. <see cref="Url"/> is the one place a session id exists outside memory-only
-/// state: it is null when the CLI left it out, and it must never reach a log, a config file or a message.
-/// </summary>
-public sealed record OpenAsResult(string Site, string User, string FullName, string UserType, string Path, string? Url);
-
-/// <summary>One user of <c>users --json</c>.</summary>
-public sealed record SiteUser(string Name, string FullName, string UserType, IReadOnlyList<string> Roles, int RoleCount, string? LastLogin);
-
-/// <summary><c>users --json</c>. <see cref="Truncated"/> is true when more users matched than the limit.</summary>
-public sealed record UserList(string Site, IReadOnlyList<SiteUser> Users, bool Truncated);
-
 [JsonSerializable(typeof(StatusDto))]
 [JsonSerializable(typeof(ListDto))]
 [JsonSerializable(typeof(DoctorDto))]
 [JsonSerializable(typeof(LogsDto))]
 [JsonSerializable(typeof(ReportDto))]
-[JsonSerializable(typeof(OpenAsDto))]
-[JsonSerializable(typeof(UserListDto))]
 internal sealed partial class BenchJsonContext : JsonSerializerContext;
 
 /// <summary>
@@ -277,13 +227,15 @@ public static class BenchJson
         var name = dto.Name ?? System.IO.Path.GetFileName(path.TrimEnd('/', '\\'));
         var sites = (dto.Sites ?? [])
             .Where(x => !string.IsNullOrEmpty(x.Name))
-            .Select(x => new SiteInfo(x.Name!, x.Default ?? false, x.DeveloperMode ?? false, x.OpenAs))
+            .Select(x => new SiteInfo(x.Name!, x.Default ?? false))
             .ToList();
         return new BenchStatus(name, path, ParseState(dto.State), dto.StopReason, dto.WebUrl, dto.Site)
         {
             RawState = dto.State?.Trim() ?? "",
             LogPath = dto.Log,
             Sites = sites,
+            Scheduler = dto.Scheduler,
+            StartedAt = DateTimeOffset.TryParse(dto.StartedAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AssumeUniversal, out var started) ? started : null,
         };
     }
 
@@ -351,38 +303,5 @@ public static class BenchJson
         var dto = JsonSerializer.Deserialize(json, BenchJsonContext.Default.ReportDto)
                   ?? throw new JsonException("report: empty document");
         return string.IsNullOrWhiteSpace(dto.Zip) ? throw new JsonException("report: no zip path") : dto.Zip;
-    }
-
-    /// <summary><c>open --print-url --json</c>. A missing <c>user</c> is malformed; a missing <c>url</c> is allowed (an older CLI).</summary>
-    public static OpenAsResult ParseOpenAs(string json)
-    {
-        var dto = JsonSerializer.Deserialize(json, BenchJsonContext.Default.OpenAsDto)
-                  ?? throw new JsonException("open: empty document");
-        if (string.IsNullOrEmpty(dto.User)) throw new JsonException("open: no user");
-        return new OpenAsResult(
-            dto.Site ?? "",
-            dto.User,
-            dto.FullName ?? "",
-            dto.UserType ?? "",
-            string.IsNullOrEmpty(dto.Path) ? "/app" : dto.Path,
-            string.IsNullOrWhiteSpace(dto.Url) ? null : dto.Url);
-    }
-
-    /// <summary><c>users --json</c>. Entries with no name are dropped.</summary>
-    public static UserList ParseUsers(string json)
-    {
-        var dto = JsonSerializer.Deserialize(json, BenchJsonContext.Default.UserListDto)
-                  ?? throw new JsonException("users: empty document");
-        var users = (dto.Users ?? [])
-            .Where(u => u is not null && !string.IsNullOrEmpty(u.Name))
-            .Select(u => new SiteUser(
-                u!.Name!,
-                u.FullName ?? "",
-                u.UserType ?? "",
-                (u.Roles ?? []).Where(r => !string.IsNullOrEmpty(r)).Select(r => r!).ToList(),
-                u.RoleCount ?? u.Roles?.Count ?? 0,
-                string.IsNullOrEmpty(u.LastLogin) ? null : u.LastLogin))
-            .ToList();
-        return new UserList(dto.Site ?? "", users, dto.Truncated ?? false);
     }
 }

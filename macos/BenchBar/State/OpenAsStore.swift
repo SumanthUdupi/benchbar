@@ -38,29 +38,21 @@ final class OpenAsStore {
     /// Switches running per site ("<bench>|<site>"): the menu shows a spinner while it is above 0.
     /// A count, not a flag: with two switches on one site, the first to end must not stop the spinner.
     private(set) var switchingCount: [String: Int] = [:]
-    /// A one-time explanation of why Keep the page I'm on did nothing; `dismissNotice` clears it.
-    private(set) var notice: String?
-    /// The site ("<bench>|<site>") the last switch happened on: Quick Switch opens there.
-    private(set) var lastSwitchedKey: String?
 
     @ObservationIgnored private let defaults: UserDefaults
-    @ObservationIgnored private let keepPage: () -> Bool
     @ObservationIgnored private let browser: any BrowserOpening
     @ObservationIgnored private let checkSession: @Sendable (URL, String) async -> String?
     @ObservationIgnored private let clock: () -> Date
     @ObservationIgnored private var sessions: [String: Session] = [:]
     @ObservationIgnored private var lastMillis = 0
-    @ObservationIgnored private var noticesShown: Set<TabControlIssue> = []
     @ObservationIgnored private var errorsByBench: [String: String] = [:]
 
     /// `checkSession(siteURL, sid)` answers with the user the id belongs to, nil when nothing answered.
     init(defaults: UserDefaults = .standard,
-         keepPage: @escaping () -> Bool = { false },
          browser: any BrowserOpening = BrowserRouter(),
          checkSession: @escaping @Sendable (URL, String) async -> String? = OpenAsStore.probeSession,
          clock: @escaping () -> Date = Date.init) {
         self.defaults = defaults
-        self.keepPage = keepPage
         self.browser = browser
         self.checkSession = checkSession
         self.clock = clock
@@ -78,8 +70,6 @@ final class OpenAsStore {
     func isSwitching(bench: String, site: String) -> Bool {
         (switchingCount[Self.siteKey(bench: bench, site: site)] ?? 0) > 0
     }
-
-    func dismissNotice() { notice = nil }
 
     /// What `bench.lastError` becomes after a switch on `bench`. A failure
     /// replaces it; a success clears only the error an earlier switch put there,
@@ -112,6 +102,35 @@ final class OpenAsStore {
         pins[key] = list
         savePins()
         return true
+    }
+
+    /// Forgets the pins of benches and sites that are gone. `sitesByBench`
+    /// holds the sites of each bench that is still listed, nil for a bench
+    /// whose sites are not known now (its pins stay); a bench not in it is gone.
+    func prune(keeping sitesByBench: [String: Set<String>?]) {
+        let kept = pins.filter { key, _ in
+            guard let split = key.lastIndex(of: "|") else { return false }
+            guard let sites = sitesByBench[String(key[..<split])] else { return false }
+            return sites?.contains(String(key[key.index(after: split)...])) ?? true
+        }
+        guard kept.count != pins.count else { return }
+        pins = kept
+        savePins()
+    }
+
+    /// Forgets the sessions this app made on the sites of `bench` that are
+    /// not in `usable` (Open as turned off, developer_mode off, another
+    /// default site), so a cached one cannot switch past the opt-in. The
+    /// sessions stay valid on the site: turning Open as off ends none.
+    func forgetSessions(bench: String, keeping usable: Set<String>) {
+        let prefix = bench + "|"
+        let kept = sessions.filter { key, _ in
+            guard key.hasPrefix(prefix) else { return true }
+            let rest = key.dropFirst(prefix.count)
+            guard let bar = rest.firstIndex(of: "|") else { return false }
+            return usable.contains(String(rest[..<bar]))
+        }
+        if kept.count != sessions.count { sessions = kept }
     }
 
     func unpin(_ user: String, bench: String, site: String) {
@@ -161,7 +180,7 @@ final class OpenAsStore {
     /// A session this app created is reused while the site still says it
     /// belongs to `user`; a logged out, expired or flushed one is replaced.
     func switchTo(user: String, bench: String, site: String, siteURL: String, path: String?,
-                  isDefaultSite: Bool = false, fullName: String? = nil, client: any OpenAsCLI) async -> String? {
+                  fullName: String? = nil, client: any OpenAsCLI) async -> String? {
         let siteKey = Self.siteKey(bench: bench, site: site)
         let sessionKey = "\(siteKey)|\(user)"
         switchingCount[siteKey, default: 0] += 1
@@ -170,21 +189,17 @@ final class OpenAsStore {
             switchingCount[siteKey] = left > 0 ? left : nil
         }
 
-        let keptTab = await tabToKeep(siteURL: siteURL, isDefaultSite: isDefaultSite)
-        defer { noteTabControlIssue() }
-        let landing = keptTab.map(BrowserRouter.path(of:)) ?? path
-
-        var link: URL
+        let link: URL
         var name = fullName
         if let session = sessions[sessionKey], let probeURL = URL(string: session.base),
            await checkSession(probeURL, session.sid) == user,
-           let reused = OpenAsLink.url(base: session.base, path: landing ?? session.homePath, sid: session.sid, millis: nextMillis()) {
+           let reused = OpenAsLink.url(base: session.base, path: path ?? session.homePath, sid: session.sid, millis: nextMillis()) {
             link = reused
         } else {
             sessions[sessionKey] = nil
             let result: OpenAsResult
             do throws(CLIError) {
-                result = try await client.openAs(bench: bench, site: site, user: user, path: landing)
+                result = try await client.openAs(bench: bench, site: site, user: user, path: path)
             } catch {
                 return OpenAsLink.scrub(error.localizedDescription)
             }
@@ -197,24 +212,8 @@ final class OpenAsStore {
         }
 
         recordRecent(user, fullName: name, key: siteKey)
-        lastSwitchedKey = siteKey
-        if let keptTab { link = BrowserRouter.link(link, onHostOf: keptTab) }
-        if keptTab != nil, await browser.replaceFrontTab(with: link) { return nil }
         browser.open(link)
         return nil
-    }
-
-    /// The front tab, when "Keep the page I'm on" is on and it shows this site.
-    private func tabToKeep(siteURL: String, isDefaultSite: Bool) async -> URL? {
-        guard keepPage(), let site = URL(string: siteURL), let tab = await browser.frontTabURL(),
-              BrowserRouter.matches(tabURL: tab, siteURL: site, isDefaultSite: isDefaultSite) else { return nil }
-        return BrowserRouter.path(of: tab).hasPrefix("//") ? nil : tab
-    }
-
-    /// Once per app run and per cause, when Keep the page I'm on is on but the browser's tab is out of reach.
-    private func noteTabControlIssue() {
-        guard keepPage(), let issue = browser.tabControlIssue, noticesShown.insert(issue).inserted else { return }
-        notice = issue.note
     }
 
     /// Milliseconds since 1970, strictly increasing: two links in the same
@@ -235,7 +234,7 @@ extension BenchStore {
             return Self.noCLIMessage
         }
         let error = await openAs.switchTo(user: user, bench: bench.path, site: row.name, siteURL: row.url, path: path,
-                                          isDefaultSite: row.isDefault, fullName: fullName, client: client)
+                                          fullName: fullName, client: client)
         bench.lastError = openAs.lastError(afterSwitchOn: bench.path, current: bench.lastError, error: error)
         return error
     }

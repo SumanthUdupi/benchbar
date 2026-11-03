@@ -159,10 +159,16 @@ nonisolated struct SiteRow: Equatable, Sendable, Identifiable {
     var developerMode = false
     /// False when the CLI did not say (older than the release that reports developer_mode).
     var developerModeKnown = true
+    /// The per site opt-in; nil from a CLI that does not report it.
+    var openAsEnabled: Bool? = nil
     /// The CLI's own answer to "will open --as sign in here"; nil from an older CLI.
     var openAs: Bool? = nil
 
     var id: String { name }
+
+    /// Whether the popover offers Open: the name resolves with a hosts line,
+    /// and a `*.localhost` name resolves on macOS without one.
+    var popoverCanOpen: Bool { !needsHosts || name.lowercased().hasSuffix(".localhost") }
 
     /// The default site first, then by name as Finder sorts it (site-2
     /// before site-10). Without sites from the CLI (a CLI older than 0.4) the
@@ -172,7 +178,7 @@ nonisolated struct SiteRow: Equatable, Sendable, Identifiable {
         return infos
             .map { SiteRow(name: $0.name, isDefault: $0.isDefault, url: "http://\($0.name):\(port)", needsHosts: !$0.hostsEntry,
                              developerMode: $0.developerMode ?? false, developerModeKnown: $0.developerMode != nil,
-                             openAs: $0.openAs) }
+                             openAsEnabled: $0.openAsEnabled, openAs: $0.openAs) }
             .sorted { a, b in
                 if a.isDefault != b.isDefault { return a.isDefault }
                 return a.name.localizedStandardCompare(b.name) == .orderedAscending

@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The General and Menu Bar tabs of the Settings window (the settings that
+/// The General and Menu Bar panes of the BenchBar window (the settings that
 /// belong to the app itself; per bench settings live on each bench's page).
 struct SettingsView: View {
     enum Part { case general, menuBar }
@@ -13,7 +13,7 @@ struct SettingsView: View {
     let notifier: Notifier
     var part: Part = .general
     var router: WindowRouter?
-    /// The pane title block; off in the Settings window, whose tab says it.
+    /// The pane title block; off where something else names the pane.
     var showsHeader = true
     let chooseCLI: () -> Void
 
@@ -58,7 +58,6 @@ struct SettingsView: View {
                         if !Updater.isAvailable { updatesSection }
                         cliSection
                         editorSection
-                        openAsSection
                         shortcutsSection.id(Self.shortcutsID)
                     case .menuBar:
                         previewSection
@@ -81,11 +80,14 @@ struct SettingsView: View {
 
     // MARK: menu bar
 
+    /// The preview is drawn at the menu bar's size times this: 2 was a speck in a wide box.
+    static let previewScale: CGFloat = 5
+
     private var previewSection: some View {
         Section {
             VStack(spacing: WindowMetrics.spacing) {
-                RunnerPreview(runner: library.runner(settings.runnerID), state: previewState)
-                    .frame(height: Runner.pointHeight * 3)
+                RunnerPreview(runner: library.runner(settings.runnerID), state: previewState, scale: Self.previewScale)
+                    .frame(height: Runner.pointHeight * Self.previewScale)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, WindowMetrics.paneInset)
                     .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: WindowMetrics.cornerRadius, style: .continuous))
@@ -148,7 +150,7 @@ struct SettingsView: View {
         } header: {
             Text("Runner")
         } footer: {
-            Text("A runner is a folder of frames with a manifest.json, or a .zip of one; docs/runners.md shows how to draw your own.")
+            Text("A runner is a folder of frames with a manifest.json, or a .zip of one; the [runners guide](\(BenchBarLinks.runnersGuide.absoluteString)) shows how to draw your own.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -202,8 +204,6 @@ struct SettingsView: View {
         (BenchShortcut.folder.action, BenchShortcut.folder.display),
         (BenchShortcut.health.action, BenchShortcut.health.display),
         (BenchShortcut.manage.action, BenchShortcut.manage.display),
-        ("Open as Administrator, a pinned user, or back", "⌘0  ⌘1–⌘9  \(OpenAsShortcut.switchBack.display)"),
-        ("Quick Switch, from any app", "⌃⌥U"),
     ]
 
     // MARK: general
@@ -236,25 +236,6 @@ struct SettingsView: View {
         } footer: {
             Text("Your benches run as their own login agents, so they keep running when BenchBar is closed.")
                 .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-
-    private var openAsSection: some View {
-        Section {
-            Toggle(isOn: $settings.keepPage) {
-                Text("Keep the page I'm on")
-                Text("Open as… sends your browser's current tab for that site to the new user, so you stay on the same page. macOS asks once to let BenchBar control the browser. Safari, Chrome, Arc, Brave and Edge only.")
-            }
-            Toggle(isOn: $settings.quickSwitchEnabled) {
-                Text("Quick Switch: ⌃⌥U")
-                Text("From any app, ⌃⌥U lists your pinned users: ↑ ↓ then ↩ switches, ⇥ moves to the next bench, esc closes. It uses no Accessibility permission.")
-                if settings.quickSwitchEnabled && settings.quickSwitchConflict {
-                    Text("⌃⌥U is used by another app")
-                        .foregroundStyle(.red)
-                }
-            }
-        } header: {
-            Text("Open as…")
         }
     }
 

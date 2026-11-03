@@ -40,13 +40,15 @@ fl_pm_conflicts() {
     while IFS= read -r row; do
       [[ "$row" == "$p "* && "${row#* }" != "$FL_BENCH_DIR" ]] || continue
       owner="${row#* }"
-      if [[ "$preferred" == 1 ]] && printf '%s\n' "${PM_SOFT:-}" | grep -Fqx "$owner"; then continue; fi
+      if [[ "$preferred" == 1 ]] && fl_has_line "${PM_SOFT:-}" "$owner"; then continue; fi
       printf '%s reserved by %s\n' "$p" "$owner"
     done <<<"$PM_TAKEN"
     while IFS= read -r pid; do
       [[ -n "$pid" ]] || continue
-      if ! fl_pid_is_bench_own_strict "$pid"; then printf '%s has a listener: pid %s\n' "$p" "$pid"; fi
-    done < <(lsof -ti "tcp:$p" -sTCP:LISTEN 2>/dev/null || true)
+      # pid 0 (Linux): ss shows the socket, not its owner; never ours
+      if [[ "$pid" == "0" ]]; then printf '%s has a listener (owner not visible)\n' "$p"
+      elif ! fl_pid_is_bench_own_strict "$pid"; then printf '%s has a listener: pid %s\n' "$p" "$pid"; fi
+    done < <(fl_port_listener_pids "$p")
   done
   return 0
 }

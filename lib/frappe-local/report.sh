@@ -87,7 +87,7 @@ fl_app_version() {
   # fl_app_version APP: __version__ of apps/APP/APP/__init__.py, or "not installed"
   local init="${FL_BENCH_DIR}/apps/$1/$1/__init__.py" v
   [[ -f "$init" ]] || { printf 'not installed'; return 0; }
-  v="$(sed -n 's/^__version__[[:space:]]*=[[:space:]]*["'"'"']\([^"'"'"']*\)["'"'"'].*/\1/p' "$init" | head -n1)"
+  v="$(sed -n 's/^__version__[[:space:]]*=[[:space:]]*["'"'"']\([^"'"'"']*\)["'"'"'].*/\1/p' "$init" | awk 'NR==1')"
   printf '%s' "${v:-unknown}"
 }
 
@@ -381,6 +381,23 @@ fl_report_print() {
   done
 }
 
+# fl_report_zip DIR ZIP: the files of DIR in a new ZIP, paths relative to DIR
+fl_report_zip() {
+  if command -v zip >/dev/null 2>&1; then
+    (cd "$1" && zip -q -r "$2" .)
+    return $?
+  fi
+  python3 -I -c '
+import os, sys, zipfile
+src, dest = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as z:
+    for root, dirs, files in os.walk(src):
+        for name in files:
+            path = os.path.join(root, name)
+            z.write(path, os.path.relpath(path, src))
+' "$1" "$2"
+}
+
 # fl_cmd_report [--print] [--out DIR], and the global --json: one line
 # {"schema_version":1,"cli_version":..,"zip":PATH,"redactions":N} on stdout
 # (N: the lines where something was replaced), the human text on stderr.
@@ -411,11 +428,14 @@ fl_cmd_report() {
     return 0
   fi
 
-  fl_require_cmd zip "install zip (macOS ships it; on Ubuntu: sudo apt-get install zip)"
+  # zip comes with the system dependencies on Linux; a distro with only the CLI uses Python's zipfile
+  if ! command -v zip >/dev/null 2>&1; then
+    command -v python3 >/dev/null 2>&1 || fl_require_cmd zip "install zip (macOS ships it; on Ubuntu: sudo apt-get install zip)"
+  fi
   stamp="$(date +%Y%m%d-%H%M%S)"
   zip="${out}/benchbar-report-${stamp}.zip"
   mkdir -p "$out"
-  (cd "$FL_REPORT_DIR" && zip -q -r "$zip" .) || { rm -rf "$FL_REPORT_DIR"; fl_die "could not write ${zip}"; }
+  fl_report_zip "$FL_REPORT_DIR" "$zip" || { rm -rf "$FL_REPORT_DIR"; fl_die "could not write ${zip}"; }
   rm -rf "$FL_REPORT_DIR"
   fl_ok "report written: ${zip}"
   fl_info "it contains doctor and status JSON, versions, the agent, Procfile.lean, state.json and log tails"

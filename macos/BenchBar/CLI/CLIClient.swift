@@ -25,7 +25,8 @@ nonisolated struct CLIClient: Sendable {
     /// The environment word that makes the CLI ask for the Mac's password in
     /// macOS's own dialog (`osascript`) instead of a terminal. Only an
     /// install, an adopt, a repair or `site hosts` run that the user
-    /// confirmed in the app gets it, and no other call.
+    /// confirmed in the app gets it, and `site open-as on` after its alert
+    /// (there it marks the call as the app's, and no sudo runs).
     static let guiSudo = ["BENCHBAR_SUDO": "gui"]
 
     /// Environment for the CLI: an explicit PATH (Finder launched apps do
@@ -333,6 +334,20 @@ nonisolated struct CLIClient: Sendable {
         let output = try await run(["users", "--bench-dir", bench, "--site", site] + searchArguments + ["--limit", String(limit), "--json"],
                                    timeout: Timeout.query, acceptExitCodes: [0])
         return try BenchJSON.decode(UserList.self, from: Data(output.stdout.utf8))
+    }
+
+    /// The per site opt-in: `site open-as on NAME --yes` or `off NAME`.
+    ///
+    /// The CLI refuses `on` under BENCHBAR_NONINTERACTIVE=1 and without a
+    /// terminal, so that no agent can turn it on. Here the click plus the
+    /// alert is the person's decision: this call sets the mode to 0 (the app's
+    /// environment may carry it) and says it comes from the app with
+    /// BENCHBAR_SUDO=gui. The `--yes` skips only the CLI's own question,
+    /// which the alert replaced.
+    @discardableResult
+    func setOpenAs(_ on: Bool, site: String, bench: String) async throws(CLIError) -> CommandOutput {
+        try await run(["site", "open-as", on ? "on" : "off", site] + (on ? ["--yes"] : []) + ["--plain", "--bench-dir", bench],
+                      timeout: Timeout.action, acceptExitCodes: [0], extraEnvironment: ["BENCHBAR_NONINTERACTIVE": "0"].merging(Self.guiSudo) { _, new in new })
     }
 
     // MARK: plumbing
