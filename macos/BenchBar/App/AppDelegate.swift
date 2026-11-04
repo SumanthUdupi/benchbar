@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var about: AboutModel!
     private var updateOffer: UpdateOffer!
     private var quickSwitch: QuickSwitchController!
+    private var guest: GuestRoomStore!
     /// benchbar:// links that arrived before the bench list was loaded
     /// (a link can launch the app).
     private var pendingURLs: [URL] = []
@@ -49,11 +50,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         notifier = Notifier(settings: settings)
         store.onAlert = { [weak self] bench, alert in self?.notifier.post(alert, bench: bench) }
+        ShareCenter.shared.attach(store)
+        store.confirmWhileSharing = { action, bench in
+            guard let line = HostAmbient.benchConfirm(ShareCenter.shared.stores[bench.path]?.status, restart: action == .restart) else { return true }
+            return ShareConfirm.ask(action == .restart ? "Restart \(bench.name)?" : "Stop \(bench.name)?", detail: line,
+                                    button: action == .restart ? "Restart" : "Stop")
+        }
+        ShareCenter.shared.onIconChange = { [weak self] icon in self?.statusItemController.setShareIcon(icon) }
+        ShareCenter.shared.onEvent = { share, event in
+            guard let notice = HostAmbient.notice(event, bench: share.bench) else { return }
+            ShareNotices.post(title: notice.title, body: notice.body, bench: share.bench, identifier: notice.identifier)
+        }
         notifier.onOpen = { [weak self] path in self?.showPopover(for: path) }
         notifier.start()
 
         updateOffer = UpdateOffer(settings: settings)
 
+        let browser = BrowserRouter()
+        guest = GuestRoomStore(dependencies: .live(identity: KeychainIdentity(), openURL: { browser.open($0) }))
         let commands = AppCommands(
             openSettings: { [weak self] in self?.openSettings() },
             quit: { NSApp.terminate(nil) },
@@ -79,9 +93,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             newBench: { [weak self] in self?.openWizard() },
             manage: { [weak self] bench, tab, repair in self?.openBench(bench, tab: tab, repair: repair) },
             updateOffer: updateOffer,
-            update: { [weak self] in self?.updateNowAction() })
-        popover = PopoverController(rootView: PopoverView(store: store, commands: commands))
-        popover.onOpenChange = { [weak self] open in self?.store.setPopoverOpen(open) }
+            update: { [weak self] in self?.updateNowAction() },
+            openNetwork: { [weak self] in
+                guard let self else { return }
+                popover.close()
+                mainWindow.show(.network)
+            })
+        popover = PopoverController(rootView: PopoverView(store: store, commands: commands, guest: guest))
+        popover.onOpenChange = { [weak self] open in
+            guard let self else { return }
+            store.setPopoverOpen(open)
+            // Rooms are browsed only while the popover is open, and never before the pane's
+            // explanation, so the Local Network prompt does not appear at an odd time.
+            if open && UserDefaults.standard.bool(forKey: NetworkPanePresentation.explainedKey) {
+                guest.startBrowsing(for: .popover)
+            } else if !open {
+                guest.stopBrowsing(for: .popover)
+            }
+        }
 
         let workbench = Workbench(store: store)
         about = AboutModel(store: store, offer: updateOffer)
@@ -124,7 +153,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                SettingsView(settings: settings, store: store, library: library, launchAtLogin: launchAtLogin,
                                             notifier: notifier, part: part, router: router,
                                             chooseCLI: { [weak self] in self?.chooseCLI() })
-                           })
+                           },
+                           guest: guest)
         }
         // open, close, occlusion and the page: the window's views stay alive
         // when it closes, so the store hears of them from the controller
@@ -143,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task {
             await store.start()
+            for bench in store.benches { _ = ShareCenter.shared.store(for: bench.path) }
             benchesLoaded = true
             let waiting = pendingURLs
             pendingURLs = []
@@ -247,6 +278,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Self.urlLog.notice("Ignored \(link, privacy: .public): \(reason, privacy: .public)")
         case .window:
             openMainWindow()
+        case .share(let target):
+            Self.urlLog.info("share link: a joined room's page")
+            Task { [weak self] in
+                guard let self else { return }
+                // an unknown room only shows the pane; a link never joins (U3)
+                if !(await guest.open(link: target)) { mainWindow.show(.network) }
+            }
+        case .shareInvite(let invite):
+            Self.urlLog.info("share invite link: the join sheet, waiting for a click")
+            guest.open(invite: invite)
+            mainWindow.show(.network)
         case .profile(let link):
             Self.urlLog.info("profile link: Team Profiles, sheet prefilled")
             mainWindow.router.profileRequest = link
@@ -329,6 +371,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// open) shows the window: a menu bar app has nothing else to show.
     /// A log window on screen does not count: `hasVisibleWindows` is true
     /// for it, and the BenchBar window stayed closed.
+    /// Quitting kills a running share setup or teardown (the CLI gets SIGTERM):
+    /// the copy is left half made, so ask first. Keep running is the default.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard ShareCenter.shared.setupOrTeardownRunning else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "Sharing setup is still running."
+        alert.informativeText = "Quitting now stops it halfway; the copy will need setup again."
+        alert.addButton(withTitle: "Keep running")
+        alert.addButton(withTitle: "Quit anyway")
+        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !mainWindow.isVisible { openMainWindow() }
         return true
