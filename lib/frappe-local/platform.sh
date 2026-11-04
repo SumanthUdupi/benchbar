@@ -110,7 +110,7 @@ fl_crontab_denied() {
 fl_brew_ensure() {
   local formula="$1"
   if brew list --formula --versions "$formula" >/dev/null 2>&1; then
-    fl_info "$formula already installed ($(brew list --versions "$formula" | head -n1))"
+    fl_info "$formula already installed ($(brew list --versions "$formula" | awk 'NR==1'))"
   else
     fl_run_long "brew install ${formula}" brew install "$formula"
   fi
@@ -176,13 +176,29 @@ fl_process_running() {
 
 fl_brew_service_running() {
   local svc="$1"
-  brew services list 2>/dev/null | awk -v s="$svc" '$1==s {print $2}' | grep -q '^started$'
+  local states
+  states="$(brew services list 2>/dev/null | awk -v s="$svc" '$1==s {print $2}' || true)"
+  fl_has_line "$states" started
 }
 
 fl_port_listening() {
   local port="$1"
   lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1
 }
+
+# The working folder of whatever listens on PORT (the bench's own Redis runs
+# inside the bench), or nothing when nothing listens or it cannot be read.
+fl_port_owner_cwd() {
+  local pid
+  pid="$(lsof -ti "tcp:$1" -sTCP:LISTEN 2>/dev/null | awk 'NR==1' || true)"
+  [[ -n "$pid" ]] || return 0
+  lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | awk 'NR==1'
+}
+
+# fl_install_port_blockers: lines "id|message|fix" for a port that another
+# program holds and that this install needs. None on macOS: Homebrew's
+# MariaDB and Redis cope with an existing server (see the safe mode note).
+fl_install_port_blockers() { return 0; }
 
 fl_mariadb_safe_mode_note() {
   fl_warn "Existing MariaDB/MySQL may already be using port 3306."

@@ -265,3 +265,14 @@ func (mutexLocks) TryLock(name string) (func(), bool, error) {
 	}
 	return func() { windows.CloseHandle(h) }, true, nil
 }
+
+// systemDir is the system folder (System32) from GetSystemDirectory. It
+// never reads an environment variable: an elevated process can inherit
+// variables a user without admin rights set for themselves.
+func systemDir() string {
+	d, err := windows.GetSystemDirectory()
+	if err != nil {
+		return ""
+	}
+	return d
+}

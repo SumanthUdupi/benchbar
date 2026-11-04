@@ -65,9 +65,20 @@ fl_bench_run() {
   (cd "$bench_dir" && "$@")
 }
 
+# fl_dry_run_pending TOOL: true in a dry run when TOOL is missing and step 1
+# of benchbar install (BENCHBAR_PLAN_STEP1 names its script) would install it;
+# says so as a note, not a warning, so the plan stays a plan
+fl_dry_run_pending() {
+  [[ "${FL_DRY_RUN:-0}" == "1" ]] || return 1
+  fl_info "dry-run: $1 is not installed yet; step 1 (${BENCHBAR_PLAN_STEP1:-the system dependencies}) will install it"
+}
+
 fl_install_pipx_if_needed() {
   # uv is preferred for bench itself; pipx is only needed without it
   command -v uv >/dev/null 2>&1 && return 0
+  if [[ -n "${BENCHBAR_PLAN_STEP1:-}" ]] && ! command -v pipx >/dev/null 2>&1; then
+    fl_dry_run_pending uv && return 0
+  fi
   fl_section "PIPX"
   fl_info "Checking pipx"
   if command -v pipx >/dev/null 2>&1; then
@@ -102,6 +113,13 @@ fl_bench_owner() {
   esac
 }
 
+# pipx lists frappe-bench as an indented "package frappe-bench" line
+fl__pipx_has_bench() {
+  local listed
+  listed="$(pipx list 2>/dev/null || true)"
+  [[ "$listed" == '   package frappe-bench'* || "$listed" == *$'\n   package frappe-bench'* ]]
+}
+
 fl_install_bench_if_needed() {
   fl_section "BENCH CLI"
   fl_info "Checking frappe-bench CLI"
@@ -122,6 +140,9 @@ fl_install_bench_if_needed() {
     fi
     return 0
   fi
+  if [[ -n "${BENCHBAR_PLAN_STEP1:-}" ]] && ! command -v uv >/dev/null 2>&1 && ! command -v pipx >/dev/null 2>&1; then
+    fl_dry_run_pending uv && { fl_info "dry-run: frappe-bench is then installed with: uv tool install frappe-bench"; return 0; }
+  fi
   if command -v uv >/dev/null 2>&1; then
     # the official docs install bench with uv; uv says where its executables
     # go (UV_TOOL_BIN_DIR, XDG_BIN_HOME, else ~/.local/bin)
@@ -130,7 +151,7 @@ fl_install_bench_if_needed() {
     PIPX_BIN_DIR="$(uv tool dir --bin 2>/dev/null || true)"
     PIPX_BIN_DIR="${PIPX_BIN_DIR:-$HOME/.local/bin}"
     export PATH="${PIPX_BIN_DIR}:$PATH"
-  elif pipx list 2>/dev/null | grep -q '^   package frappe-bench'; then
+  elif fl__pipx_has_bench; then
     fl_info "frappe-bench already installed via pipx"
   else
     fl_warn "frappe-bench is missing; installing with pipx"
@@ -340,15 +361,6 @@ fl_bench_write_ports() {
 
 FL_SETUP_REDIS_PORTS=""
 
-# The working folder of whatever listens on PORT (the bench's own Redis runs
-# inside the bench), or nothing when nothing listens or it cannot be read.
-fl_port_owner_cwd() {
-  local pid
-  pid="$(lsof -ti "tcp:$1" -sTCP:LISTEN 2>/dev/null | head -n1 || true)"
-  [[ -n "$pid" ]] || return 0
-  lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n1
-}
-
 fl_bench_redis_up() {
   local bench_dir="$1" conf port owner
   [[ "$FL_DRY_RUN" == "1" ]] && { fl_info "dry-run: start the bench's Redis (config/redis_queue.conf, config/redis_cache.conf) for the site setup"; return 0; }
@@ -495,7 +507,8 @@ fl_install_app_if_needed() {
     # shellcheck disable=SC2015  # an unreadable list means "nothing installed yet"
     installed="$(cd "$bench_dir" && bench --site "$site_name" list-apps 2>/dev/null || true)"
   fi
-  if printf '%s\n' "$installed" | awk '{print $1}' | grep -qx "$app"; then
+  installed="$(printf '%s\n' "$installed" | awk '{print $1}')"
+  if fl_has_line "$installed" "$app"; then
     fl_ok "${app} already installed on ${site_name}"
   else
     fl_bench_run_long "bench install-app ${app} on ${site_name}" "$bench_dir" bench --site "$site_name" install-app "$app" \

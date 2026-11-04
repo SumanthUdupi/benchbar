@@ -19,6 +19,8 @@ keeping a program running in the background.
 Open BenchBar. On a Mac with no bench, its window opens on a short
 wizard that does the steps below for you:
 
+![The first run wizard's Welcome page](images/wizard-welcome.png)
+
 1. **Check Your Mac** lists what is missing, with a button for the
    Command Line Tools and the Homebrew command to copy.
 2. **New Bench** asks for the folder, the profile (v15-lts, v16-lts or a
@@ -28,6 +30,8 @@ wizard that does the steps below for you:
    in its own dialog for the wkhtmltopdf package and the `/etc/hosts`
    line; BenchBar never sees it.
 4. **Done** opens the site and offers a four step walkthrough of the app.
+
+![The wizard's Review page, before anything changes](images/wizard-review.png)
 
 With a bench you already have, choose **I Already Have a Bench**: Find
 Benches finds it in a folder and sets up its service after showing the
@@ -113,6 +117,15 @@ adopted a bench, `benchbar status` shows the site's URL; use that.
 In the browser, log in as `Administrator` with the password you gave
 `install` (or your existing one), and walk through the setup wizard. You
 can close Terminal; the bench keeps running until `benchdown`.
+
+## Linux and Windows
+
+On Ubuntu 24.04, clone the repository and run `./benchbar install`, then
+`source ~/.bashrc` and `benchup`. See [Install: Linux](install.md#linux).
+
+On Windows, install BenchBar for Windows (a beta) with the one line in
+[Install: Windows](install.md#windows). Its tray opens a first run wizard
+that sets up WSL, the distro and the bench. See [Windows](windows.md#first-run).
 
 ## What next
 

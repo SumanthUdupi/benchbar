@@ -129,8 +129,11 @@ and follow the Linux notes above. From PowerShell, `benchbar.exe` forwards
 every command to the distro with its input, output and exit code
 unchanged, so `benchbar.exe status --json` and `benchbar.exe mcp` give
 what the CLI inside gives. `benchbar.exe doctor` adds the Windows checks
-(PATH, the distro, `.wslconfig`, keepalive) first. Windows is a preview:
-the programs are unsigned. See `docs/windows.md`.
+(PATH, the distro, `.wslconfig`, keepalive) first, and when the tray is
+installed also the .NET Desktop Runtime and the tray at logon. Windows is
+a beta: the programs are unsigned. On a fresh Windows PC, start with the
+read only `benchbar.exe setup check --json`. Its setup actions change the
+PC, so run them with the user. See `docs/windows.md`.
 
 ## Existing or broken bench
 
@@ -213,6 +216,9 @@ Resolve & Start flow. Do not bypass conflicts by killing unrelated processes.
   skipped but the password prompt is not, so say so. Started by the app
   (`BENCHBAR_SUDO=gui`), macOS asks in its own dialog once per step instead,
   at most two per run.
+- Open as is the person's choice. Never run `benchbar site open-as on`
+  (it refuses an agent anyway) and never ask for or use an
+  `open --as --print-url` link: it holds a login session for that user.
 - Never print or log the MariaDB root password. It lives in the Keychain
   (a 0600 file on Linux);
   `benchbar mariadb-password --yes` prints it when a user asks for it.
@@ -225,6 +231,11 @@ Resolve & Start flow. Do not bypass conflicts by killing unrelated processes.
 
 ## Contributing a change
 
+- Run `bash tests/affected.sh` for the tests your change touches; the full
+  suite (`bash tests/run-tests.sh`) before you hand the work back.
+- Branch from `next-release` and open the pull request against it.
+  `main` holds the last release and moves only when one is cut
+  (docs/releasing.md).
 - Do not commit your own working notes: design briefs, plans, specs,
   state or progress files, or anything your tooling writes for itself
   (for example `design-state.md`, `docs/designpowers/`, `docs/plans/`,

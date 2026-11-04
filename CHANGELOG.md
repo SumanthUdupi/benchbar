@@ -2,6 +2,221 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+### Mac app
+
+- Open as has keyboard shortcuts. In the popover, ⌘0 opens the default
+  site as Administrator, ⌘1 to ⌘9 as a pinned user, and ⇧⌘O switches back.
+  Quick Switch (⌃⌥U) lists the same users from any app; it is off until
+  you turn it on in Settings, which also says when another app holds the key.
+
+## 0.8.1 - 2026-11-01
+
+BenchBar for Windows is now a beta. The tray takes a new PC from no WSL to
+a running bench, and manages benches from its own window, as the Mac app
+does. Report a Bug sends a redacted report in about a minute.
+
+On the Mac, Open as signs a development site in as any of its users, so
+you can check what each role sees, once you turn it on for that site.
+Settings and About are back in the BenchBar window, the popover reads
+over a white page in dark mode, and the menu bar has new runners.
+
+### Windows beta
+
+- The window title, a Beta pill and a banner that you can dismiss say that
+  Windows is a beta. The banner has Report a Bug.
+- Report a Bug is in the tray menu, About, the beta banner and the footer
+  of every wizard page, and Report This Problem is next to each failure.
+  It writes a zip to `%LOCALAPPDATA%\BenchBar\reports`, then a small
+  window selects the zip in Explorer and opens a GitHub issue with the versions, the Windows build
+  and the distro filled in. It works before WSL or Ubuntu is installed and
+  while the distro is stopped, and never starts the distro. User names and
+  home paths are replaced with `<user>`.
+- `benchbar.exe report-windows --json` writes that zip from the command
+  line.
+- New issue form for Windows bugs.
+
+### Added
+
+- `benchbar open --as USER` opens a site signed in as any of its users,
+  with no password, to check what a role sees and which workflow actions
+  it gets. It is off until you turn it on for a site, in a terminal:
+  `benchbar site open-as on NAME`. The site also needs `developer_mode`
+  (Administrator included) and must be the site the web process answers
+  as. A sign in runs the apps' `on_login` and `on_session_creation` hooks
+  as a real login does (`last_login`, an Activity Log entry, a mail to
+  System Managers for Administrator, an ERPNext Customer or Supplier for a
+  Website User), and Frappe may end the user's oldest session. `--path` lands on a page,
+  `--print-url` prints the link instead. `benchbar open` alone opens the
+  site.
+- `benchbar site open-as on|off|status [NAME]` keeps that choice in
+  benchbar's state for the bench, never in `sites/`. `on` is refused for an
+  agent (`--for-agent`, `benchbar mcp`); `off` is always allowed.
+- `benchbar users` lists the enabled users of a site with their roles,
+  for picking one to open as (`--search`, `--limit`, `--json`).
+- `site list --json` and `status --json` give each site `developer_mode`,
+  `open_as_enabled` and `open_as`.
+- BenchBar app: **Open as…** on the default site, in the popover, the Sites
+  tab and the Overview. A site's `...` menu has **Allow Open as…** (an alert
+  says what a sign in does) and **Turn Off Open as**. The menu lists
+  Switch Back, pinned users with labels, Administrator and **Find User…**; the
+  row then reads `as NAME`. Nothing shows until a site is opted in.
+- Five more built in runners for the menu bar and the Windows tray:
+  Kettle, Server rack, Paper plane, Snail and Rocket. Pick one under
+  Runner in the Menu Bar pane on the Mac, or in the tray's Runner menu
+  and Settings on Windows. Each one has its own way to sleep, start, run,
+  crash and ask: the kettle boils and pops its lid, the rack blinks and
+  jams a drive, the plane flies and nose dives, the snail hurries and
+  rolls in its shell, the rocket flies and tumbles.
+- The ids `kettle`, `server`, `plane`, `snail` and `rocket` are now
+  reserved. A custom runner folder with one of these names shows an error
+  in Settings; rename the folder and import it again.
+
+### Windows
+
+- A BenchBar window with your benches and their sites, Settings and About.
+  Open it from the tray menu, the flyout or a double click on the tray icon.
+- A first run wizard in that window: check this PC, turn on WSL (Windows
+  asks for permission once), restart and resume, install Ubuntu 24.04,
+  create the Linux user, turn on systemd, install the command line tool,
+  then create a bench with every step streamed. It also adopts a bench you
+  already have.
+- `benchbar.exe setup check --json` reads the PC step by step (Windows
+  build, virtualization, WSL, restart, distro, Linux user, systemd, CLI,
+  linger, keepalive, `.wslconfig`, PATH), and `benchbar.exe setup run
+  ACTION --jsonl` fixes one step and streams JSON lines. Only turning on
+  WSL asks Windows for permission.
+- The shim passes `ADMIN_PASSWORD`, `MARIADB_ROOT_PASSWORD`,
+  `BENCHBAR_SUDO`, `BENCHBAR_SUDO_PASSWORD` and `BENCHBAR_NONINTERACTIVE`
+  into WSL for the one run, through `WSLENV`, and nothing else.
+- Open in editor offers VS Code, Cursor or VS Code Insiders, and the window
+  says when a newer release is out.
+- Each bench in the window has Overview, Sites, Apps and Health tabs, as on
+  the Mac. The Overview shows uptime, a line that says why a bench is
+  stopped and what to do, the lockfile state, a Scheduler switch, Port
+  Settings and Setup, and Console and Database in Windows Terminal.
+- Sites: add, make default, back up (with or without files), list backups,
+  restore from a backup (new, the Mac app has no restore yet), drop with the
+  name typed, and open. Windows resolves `*.localhost` itself, so the tray
+  never edits a hosts file.
+- Apps: list, add with the reviewed plan, update after the dry run, install
+  on a site, focus pins and Check Remotes.
+- Health: doctor with the Windows setup checks, Copy fix, and Repair after
+  the plan, with the Linux password asked once for the steps that use sudo.
+- Ports: Automatic or Fixed, the plan, Apply, Review Port Conflict and
+  Resolve and Start. Start and Restart, from the window and the flyout,
+  check the ports first and refuse on a conflict; nothing is ever killed.
+- Find Benches scans a folder in WSL, adds benches, sets up their ports and
+  their management. Team Profiles creates, imports, subscribes to, exports,
+  updates, checks and removes team profiles; Windows file paths are
+  converted with `wslpath`.
+- The log window filters by process, searches, follows the log, shows the
+  previous log and opens `tail -f` in Windows Terminal.
+
+### Linux
+
+- `BENCHBAR_SUDO=env`: a program without a terminal, such as the Windows
+  tray, passes the sudo password in `BENCHBAR_SUDO_PASSWORD`. `install`,
+  `adopt`, `repair`, `service`, `site add` and `ports apply` run their sudo
+  steps without a prompt. A wrong password stops the command before any
+  change with `error_id` `sudo_password_wrong` on the `done` line. The
+  password is read once at startup, removed from the environment, and never
+  appears in arguments, `bash -x` output, the run log or a child process.
+- `benchbar doctor --prerequisites` works on Linux (Ubuntu 24.04, WSL too):
+  distribution, architecture, regular user, sudo, apt, systemd as PID 1,
+  linger, memory, disk, bench folder, an existing MariaDB with an unknown
+  root password, and the default ports.
+- Every `done` line can carry `error_id`, a stable id for the failure.
+- `ports plan`, `ports apply` and `ports check` see a foreign listener on a
+  bench port when `lsof` is not installed, and `site add`, `site backup`,
+  `site drop`, `site restore` and `app install` no longer stop with "Port N
+  is held by another process" when the bench's own Redis already runs.
+- `site hosts` says "unchanged" when every site name resolves, and gives the
+  `/etc/hosts` command as a next action for a name that does not.
+- A command that needs `--yes` and runs without a terminal says so in the
+  error of its JSON output.
+
+### Fixed
+
+- Random false warnings and failed checks are gone. Several checks piped a
+  command into `grep -q`, which quits at the first match; the command then
+  died of a broken pipe and the check failed although it matched. Each now
+  reads the output whole first.
+- General, Menu Bar and About are panes of the BenchBar window again.
+  0.8.0 gave them windows of their own, and from Settings there was no
+  way back to the BenchBar window. The gear in the sidebar footer lists
+  General and Menu Bar, the **i** opens About, and Settings… (⌘,) opens
+  the window on General.
+
+- Mac app, from a live pass on a Mac: the popover is readable over a
+  white web page in dark mode (it kept clear glass, so white text sat on
+  light grey); the BenchBar window reloads the benches when you come
+  back to it, so `developer_mode` set in a terminal shows at once instead
+  of up to five minutes later; Find User keeps one height as you type,
+  no longer closes on Return in a label field and drops the "System User"
+  badge from every row; the Allow Open as alert reads in three short
+  paragraphs; Open as… looks like the buttons beside it; About keeps the
+  command line tool's path under its row; the Window menu has no tab
+  items; the first run wizard says in a line what each of its three
+  choices does.
+
+- Mac app: the popover no longer says "Hostname setup needed" or shows the
+  hosts banner (the Sites tab in the window has it, with Set Up…), and
+  offers Open for a `*.localhost` site that has no hosts line. The first run
+  wizard has Report a Bug… on every page, and Cancel goes back to the page
+  you came from. A success banner clears when you change tab, the Overview
+  tab no longer draws a focus ring on open, the Menu Bar preview is larger and sharp (built in runners are drawn at the preview's size, not the menu bar's frames enlarged),
+  the runners guide is a link, and the doctor, profile, lockfile and
+  install icons have VoiceOver labels.
+
+- On Linux, `benchbar install` checks ports 3306 (MariaDB) and 6379 (the system Redis) before it asks for sudo or changes anything. In WSL 2 all distros share one network, so a second distro failed after 43 seconds with "systemctl start mariadb failed" because another distro's MariaDB held 3306. The plan now lists the port as a blocker, and the run stops at once with `port_3306_in_use` (or `port_6379_in_use`), a message and a fix. Nothing is stopped for you. A rerun on the distro that owns MariaDB is not a blocker.
+- `benchbar install --dry-run` on a fresh Linux machine (no uv, no pipx yet) exits 0 with its plan. Step 2 used to stop with "Neither uv nor pipx is installed" before step 1 had installed them, which the Windows tray read as "the plan could not be made". The dry run now says that step 1 will install uv, Python, Node and the rest. A real blocker, such as too little disk, still fails the dry run.
+- The one line installer works on Linux and WSL. `curl ... install.sh | bash` in Ubuntu 24.04 installs the command line tool (a clone in `~/.local/share/benchbar`, a link in `~/.local/bin`, `PATH` in `~/.bashrc`) without sudo or questions, and names `sudo apt install -y git` when git is missing. It stopped with "This installer is for macOS" before, which broke the Windows tray's command line tool step. `benchbar.exe` now runs the installer of its own release (`v<version>`, with `--version`); a development build uses `main`.
+- Turning on WSL asks Windows to elevate only `System32\wsl.exe`, never
+  `benchbar.exe` from a folder that the user can write to. Only one
+  elevation runs at a time. If you stop waiting, the install keeps running
+  in Windows and the wizard asks for a restart.
+- The wizard no longer stops for ever on Install or a bench page on
+  Loading when Windows blocks `benchbar.exe`. It says to allow it in
+  SmartScreen or the antivirus.
+- Check Your PC: linger, keepalive, `.wslconfig` and PATH are advice and
+  never block Continue (`blocking` in `setup check`). Each row without a
+  button shows its fix command with Copy. A running step has Cancel.
+- Setting up systemd or the Linux user no longer stops a running distro
+  without asking: `setup run` refuses with `error_id` `distro_running`
+  until you confirm (`--force`).
+- A restart that the Ubuntu install needs keeps Restart Now on screen.
+  Restart Now comes back if Windows did not restart.
+- The wizard, install, adopt and Report a Bug all use the same distro.
+- The plan review sheet always has Stop Waiting.
+- Esc no longer clears typed passwords. Keyboard focus stays on the
+  control you used, and screen readers hear status changes.
+- The wizard opens by itself only on a PC that needs setup, not for a
+  returning user whose first check failed.
+- `benchbar report` works without `zip` installed and without a bench.
+- The sudo password of `BENCHBAR_SUDO=env` is no longer in
+  `/proc/PID/environ` of the running command, and every command forgets it
+  after its sudo steps. On Linux, repair runs its sudo steps first.
+- `setup run cli_install` names a failed download (for example a 404)
+  instead of saying that benchbar is not on the PATH.
+- Advice rows with an action, such as `.wslconfig`, have a Set Up button.
+  Set Up Everything runs only the steps that block.
+- The Review page shows the fix for a plan that cannot run, and each
+  blocker with its fix.
+- Stopping a step says "Stopped" instead of talking about a Windows
+  prompt that never came.
+- `doctor --prerequisites` on Linux warns, not fails, when the user is not
+  in the `sudo` group.
+- The Windows tray: Check Your PC draws again (it spun at 100 percent CPU
+  on a culture error and laid out wider than the window). Icon buttons
+  (More actions, the sidebar) show their icons. The log toolbar fits the
+  window. A finished step drops its "Turning on WSL" text, waiting rows
+  name the step they wait for, and a distro override is explained as
+  advice. A failed install says "Install Failed" and what to do. Create
+  User and Review say what they wait for. An empty flyout has Set Up a
+  Bench, and a distro that WSL does not have shows "not installed".
+
 ## 0.8.0 - 2026-10-30
 
 ### Agents and recovery

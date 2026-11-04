@@ -6,19 +6,10 @@ namespace Tray.Core.Tests;
 internal static class Fixtures
 {
     /// <summary>The spike's fixtures folder, found by walking up from the test binaries.</summary>
-    public static string Root { get; } = Find();
+    public static string Root => BenchBar.Tray.TestSupport.FixtureFiles.Root;
 
     public static string Dir(string name) => Path.Combine(Root, name);
 
-    private static string Find()
-    {
-        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
-        {
-            var candidate = Path.Combine(dir.FullName, "fixtures");
-            if (Directory.Exists(Path.Combine(candidate, "recorded"))) return candidate;
-        }
-        throw new DirectoryNotFoundException("fixtures folder not found above " + AppContext.BaseDirectory);
-    }
 
     /// <summary>A scratch copy of a fixture folder that a test may change.</summary>
     public static string Copy(string name)
@@ -77,6 +68,10 @@ internal sealed class FakeHost : ITrayHost
     public string Tooltip { get { lock (_gate) return _tooltip; } }
     public IReadOnlyList<(TraySnapshot Snapshot, string UpText)> Changes { get { lock (_gate) return [.. _changes]; } }
     public IReadOnlyList<Toast> Toasts { get { lock (_gate) return [.. _toastsShown]; } }
+    private readonly List<string> _notices = [];
+    public IReadOnlyList<string> Notices { get { lock (_gate) return [.. _notices]; } }
+
+    public void ShowNotice(string text) { lock (_gate) _notices.Add(text); }
 
     public void SetIcon(IntPtr hicon) { lock (_gate) _icons.Add(hicon); }
     public void SetTooltip(string text) { lock (_gate) _tooltip = text; }
@@ -182,6 +177,7 @@ internal sealed class FakeProbe : IDistroProbe
     private int _calls;
 
     public bool Running { get; set; } = true;
+    public bool Installed { get; set; } = true;
     public Exception? Throws { get; set; }
     public int Calls => Volatile.Read(ref _calls);
 
@@ -191,6 +187,8 @@ internal sealed class FakeProbe : IDistroProbe
         if (Throws is not null) throw Throws;
         return Task.FromResult(Running);
     }
+
+    public Task<bool> IsInstalledAsync(string distro, CancellationToken ct) => Task.FromResult(Installed);
 }
 
 /// <summary>A process runner that starts nothing: it answers from a script and records what it was asked.</summary>

@@ -20,6 +20,7 @@ public class TrayMenuTests : IDisposable
         var menu = new TrayMenu(new TrayMenuModel());
         Assert.Equal(
             [
+                "Open BenchBar", "Settings...", "-",
                 "Open BenchBar at logon", "Appearance", "Runner", "Notifications", "-",
                 "Check for Updates", "Help", "Report a Bug", "-", "Quit",
             ],
@@ -37,12 +38,12 @@ public class TrayMenuTests : IDisposable
         };
         var menu = new TrayMenu(model);
         var items = menu.Menu.Items.OfType<MenuItem>().ToList();
-        Assert.False(items[0].IsChecked); // nothing is read before the menu opens
+        Assert.False(items[2].IsChecked); // nothing is read before the menu opens
 
         menu.RefreshChecks();
-        Assert.True(items[0].IsChecked);
-        Assert.False(items[3].IsChecked);
-        var appearance = items[1].Items.OfType<MenuItem>().ToList();
+        Assert.True(items[2].IsChecked);
+        Assert.False(items[5].IsChecked);
+        var appearance = items[3].Items.OfType<MenuItem>().ToList();
         Assert.Equal(["System", "Light", "Dark"], appearance.Select(i => i.Header));
         Assert.Equal([false, false, true], appearance.Select(i => i.IsChecked));
     });
@@ -65,16 +66,16 @@ public class TrayMenuTests : IDisposable
         void Click(MenuItem item) => item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         var items = menu.Menu.Items.OfType<MenuItem>().ToList();
 
-        items[0].IsChecked = true; // a checkable item toggles itself before Click
-        Click(items[0]);
-        Click(items[1].Items.OfType<MenuItem>().Single(i => (string)i.Header == "Light"));
-        items[3].IsChecked = false;
-        Click(items[3]);
+        items[2].IsChecked = true; // a checkable item toggles itself before Click
+        Click(items[2]);
+        Click(items[3].Items.OfType<MenuItem>().Single(i => (string)i.Header == "Light"));
+        items[5].IsChecked = false;
+        Click(items[5]);
         foreach (var header in new[] { "Check for Updates", "Help", "Report a Bug", "Quit" })
             Click(items.Single(i => (string)i.Header == header));
 
         Assert.Equal(["logon True", "appearance Light", "notifications False", "update", "help", "report", "quit"], seen);
-        var appearance = items[1].Items.OfType<MenuItem>().ToList();
+        var appearance = items[3].Items.OfType<MenuItem>().ToList();
         Assert.Equal([false, true, false], appearance.Select(i => i.IsChecked)); // radio behaviour
     });
 
@@ -99,24 +100,44 @@ public class TrayMenuTests : IDisposable
         menu.BuildRunnerItems();
         var runner = menu.Menu.Items.OfType<MenuItem>().Single(i => (string)i.Header == "Runner");
         var runners = runner.Items.OfType<MenuItem>().Where(i => i.Tag is RunnerInfo).ToList();
-        Assert.Equal(["Bench", "Coffee cup", "Blob (by Pat)", "broken"], runners.Select(i => i.Header));
-        Assert.Equal([false, true, false, false], runners.Select(i => i.IsChecked));
-        Assert.Equal([true, true, true, false], runners.Select(i => i.IsEnabled));
-        Assert.Contains("\"name\" is missing", (string)runners[3].ToolTip);
-        Assert.All(runners.Take(3), i => Assert.IsType<Image>(i.Icon));
+        // the built ins in their order, then the runners folder: the good one, then the broken one
+        string[] builtIns = ["Bench", "Coffee cup", "Kettle", "Server rack", "Paper plane", "Snail", "Rocket"];
+        Assert.Equal([.. builtIns, "Blob (by Pat)", "broken"], runners.Select(i => i.Header));
+        Assert.Equal(runners.Select(i => (string)i.Header == "Coffee cup"), runners.Select(i => i.IsChecked));
+        Assert.Equal(runners.Select(i => (string)i.Header != "broken"), runners.Select(i => i.IsEnabled));
+        Assert.Contains("\"name\" is missing", (string)runners[^1].ToolTip);
+        Assert.All(runners.SkipLast(1), i => Assert.IsType<Image>(i.Icon));
         Assert.IsType<StackPanel>(runner.Items[0]); // the live preview sits above the list
         Assert.Equal("Coffee cup", menu.PreviewName);
         Assert.Equal("Open runners folder", ((MenuItem)runner.Items[^1]).Header);
 
-        runners[2].RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        runners[^2].RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
         Assert.Equal("blob", selected);
-        Assert.Equal([false, false, true, false], runners.Select(i => i.IsChecked));
+        Assert.Equal(runners.Select(i => (string)i.Header == "Blob (by Pat)"), runners.Select(i => i.IsChecked));
         Assert.False(menu.IsAnimating);
     });
 }
 
 internal sealed class RunnerFolder(string root) : IDisposable
 {
+    private static readonly object GdiGate = new();
+
+    /// <summary>Saves a PNG with an encoder looked up here, one thread at a time: the codec list of GDI+ can come back empty while another thread is the first to use it (ArgumentNullException, encoder).</summary>
+    private static void SavePng(System.Drawing.Bitmap bitmap, string path)
+    {
+        lock (GdiGate)
+        {
+            System.Drawing.Imaging.ImageCodecInfo? png = null;
+            for (var attempt = 0; attempt < 20 && png is null; attempt++)
+            {
+                png = System.Drawing.Imaging.ImageCodecInfo.GetImageEncoders().FirstOrDefault(e => e.FormatID == System.Drawing.Imaging.ImageFormat.Png.Guid);
+                if (png is null) Thread.Sleep(25);
+            }
+            if (png is null) throw new InvalidOperationException("GDI+ has no PNG encoder.");
+            bitmap.Save(path, png, null);
+        }
+    }
+
     public string Make(string name) => Directory.CreateDirectory(Path.Combine(root, name)).FullName;
 
     public string Good(string name)
@@ -126,7 +147,7 @@ internal sealed class RunnerFolder(string root) : IDisposable
         {
             using var bitmap = new System.Drawing.Bitmap(36, 36);
             using (var g = System.Drawing.Graphics.FromImage(bitmap)) g.Clear(System.Drawing.Color.Black);
-            bitmap.Save(Path.Combine(dir, file), System.Drawing.Imaging.ImageFormat.Png);
+            SavePng(bitmap, Path.Combine(dir, file));
         }
         File.WriteAllText(Path.Combine(dir, "manifest.json"),
             """{"name":"Blob","author":"Pat","template":true,"states":{"running":["run1.png","run2.png","run3.png"]}}""");
@@ -255,6 +276,23 @@ public class SupportTests : IDisposable
         Assert.True(File.Exists(path + ".1"));
         Assert.True(new FileInfo(path).Length <= 300);
         Assert.True(new FileInfo(path + ".1").Length <= 300);
+    }
+
+    [Fact]
+    public void TheErrorLogWritesAnIdenticalRepeatedExceptionOnceAndCountsTheRest()
+    {
+        var path = Path.Combine(_dir, "BenchBar", "tray.log");
+        var clock = new DateTime(2026, 10, 30, 12, 0, 0, DateTimeKind.Utc);
+        var log = new ErrorLog(path, utcNow: () => clock);
+        for (var i = 0; i < 500; i++) log.Write("ui", new InvalidOperationException("same"));
+        Assert.Single(File.ReadAllLines(path));
+        log.Write("ui", new InvalidOperationException("other"));
+        Assert.Equal(2, File.ReadAllLines(path).Length);
+        clock += ErrorLog.RepeatWindow + TimeSpan.FromSeconds(1);
+        log.Write("ui", new InvalidOperationException("same"));
+        var lines = File.ReadAllLines(path);
+        Assert.Equal(3, lines.Length);
+        Assert.Contains("repeated 499 more times", lines[2]);
     }
 
     [Fact]
